@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Likes 下载器
 // @namespace    https://github.com/K4F7/x-like-downloader
-// @version      2.1.0
+// @version      2.1.3
 // @description  下载 X (Twitter) 点赞列表中的图片、GIF和视频
 // @author       You
 // @icon         https://abs.twimg.com/favicons/twitter.3.ico
@@ -156,8 +156,20 @@
             color: #e7e9ea;
             display: flex;
             align-items: center;
-            justify-content: space-between;
+            justify-content: flex-start;
             gap: 8px;
+        }
+        .xld-resume-text {
+            flex: 1;
+        }
+        .xld-resume-thumb {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            object-fit: cover;
+            border: 1px solid #38444d;
+            display: none;
+            flex-shrink: 0;
         }
         .xld-btn {
             width: 100%;
@@ -192,9 +204,9 @@
         }
         .xld-foreground-warning {
             position: fixed;
-            top: 16px;
+            top: 50%;
             left: 50%;
-            transform: translateX(-50%);
+            transform: translate(-50%, -50%);
             z-index: 10000;
             max-width: 92%;
             padding: 12px 16px;
@@ -394,6 +406,7 @@
 
     // ========== 状态 ==========
     const RESUME_ANCHOR_COUNT = 10;
+    const ANCHOR_SEARCH_COUNT = 60;
     let isScanning = false;
     let collectedMedia = [];
     let lastScanMode = 'marker';
@@ -451,7 +464,7 @@
                     <div class="xld-input-row">
                         <label class="xld-checkbox-label">
                             <input type="checkbox" id="xld-preload-window">
-                            预加载窗口（默认开）
+                            预加载窗口
                         </label>
                     </div>
                     <div class="xld-input-row">
@@ -470,7 +483,9 @@
                         </label>
                     </div>
                     <div class="xld-resume-info" id="xld-resume-info" style="display:none">
-                        <span id="xld-resume-text">续传点：未设置</span>
+                        <img class="xld-resume-thumb" id="xld-resume-thumb" alt="续传缩略图">
+                        <span class="xld-resume-text" id="xld-resume-text">续传点：未设置</span>
+                        <button class="xld-btn-small" id="xld-select-resume-btn">选择</button>
                         <button class="xld-btn-small" id="xld-clear-resume-btn">清除</button>
                     </div>
                 </div>
@@ -522,8 +537,9 @@
         panel.querySelector('#xld-download-btn').addEventListener('click', downloadAll);
         panel.querySelector('#xld-clear-marker-btn').addEventListener('click', clearMarker);
         panel.querySelector('#xld-init-btn').addEventListener('click', initMarker);
-        panel.querySelector('#xld-init-select-btn').addEventListener('click', () => enterSelectMode());
-        panel.querySelector('#xld-select-marker-btn').addEventListener('click', () => enterSelectMode());
+        panel.querySelector('#xld-init-select-btn').addEventListener('click', () => enterSelectMode('marker'));
+        panel.querySelector('#xld-select-marker-btn').addEventListener('click', () => enterSelectMode('marker'));
+        panel.querySelector('#xld-select-resume-btn').addEventListener('click', () => enterSelectMode('resume'));
         panel.querySelector('#xld-clear-resume-btn').addEventListener('click', clearResumePoint);
 
         const modeRadios = panel.querySelectorAll('input[name="xld-mode"]');
@@ -689,11 +705,13 @@
     function updateResumeDisplay() {
         const resumeInfo = document.getElementById('xld-resume-info');
         const resumeText = document.getElementById('xld-resume-text');
+        const resumeThumb = document.getElementById('xld-resume-thumb');
         if (!resumeInfo || !resumeText) return;
 
         const mode = getDownloadMode();
         if (mode !== 'full') {
             resumeInfo.style.display = 'none';
+            if (resumeThumb) resumeThumb.style.display = 'none';
             return;
         }
 
@@ -703,8 +721,15 @@
             const shortId = savedResume.id.substring(0, 8) + '...';
             const displayText = savedResume.text || '(无文字内容)';
             resumeText.textContent = `续传点：${displayText} (ID: ${shortId})`;
+            if (resumeThumb && savedResume.thumbnail) {
+                resumeThumb.src = savedResume.thumbnail;
+                resumeThumb.style.display = 'inline-block';
+            } else if (resumeThumb) {
+                resumeThumb.style.display = 'none';
+            }
         } else {
             resumeText.textContent = '续传点：未设置';
+            if (resumeThumb) resumeThumb.style.display = 'none';
         }
         resumeInfo.style.display = 'flex';
     }
@@ -782,14 +807,16 @@
     // ========== 选择模式 ==========
     let isSelectMode = false;
     let selectModeBar = null;
+    let selectModeTarget = 'marker';
 
-    function enterSelectMode() {
+    function enterSelectMode(target = 'marker') {
         // 检查是否在likes页面
         const currentUrl = window.location.href;
         if (!currentUrl.includes('/likes')) {
             const username = getCurrentUsername();
             if (username) {
-                alert('请先打开你的 Likes 页面，然后再选择标记点');
+                const targetLabel = target === 'resume' ? '续传点' : '标记点';
+                alert(`请先打开你的 Likes 页面，然后再选择${targetLabel}`);
                 window.location.href = `https://x.com/${username}/likes`;
                 return;
             } else {
@@ -799,13 +826,15 @@
         }
 
         isSelectMode = true;
+        selectModeTarget = target;
         closePanel();
 
         // 创建顶部提示条
+        const targetLabel = target === 'resume' ? '续传点' : '标记点';
         selectModeBar = document.createElement('div');
         selectModeBar.className = 'xld-select-mode-bar';
         selectModeBar.innerHTML = `
-            <span>点击任意推文将其设为标记点</span>
+            <span>点击任意推文将其设为${targetLabel}</span>
             <button id="xld-cancel-select">取消</button>
         `;
         document.body.appendChild(selectModeBar);
@@ -853,13 +882,22 @@
         event.stopPropagation();
 
         const tweet = event.currentTarget;
-        const markerData = extractTweetInfo(tweet);
+        const selectedData = extractTweetInfo(tweet);
 
-        if (markerData.id) {
-            GM_setValue('markerTweetId', markerData);
-            exitSelectMode();
-            updateMarkerDisplay();
-            updateStatus('标记点已设置');
+        if (selectedData.id) {
+            if (selectModeTarget === 'resume') {
+                const snapshot = buildResumeSnapshot(tweet);
+                GM_setValue('fullResumePoint', selectedData);
+                GM_setValue('fullResumeSnapshot', snapshot);
+                exitSelectMode();
+                updateResumeDisplay();
+                updateStatus('续传点已设置');
+            } else {
+                GM_setValue('markerTweetId', selectedData);
+                exitSelectMode();
+                updateMarkerDisplay();
+                updateStatus('标记点已设置');
+            }
         } else {
             alert('无法获取该推文的ID，请选择其他推文');
         }
@@ -1153,6 +1191,7 @@
     async function scanLikes(types, options) {
         const seenUrls = new Set();
         const seenTweetIds = new Set();
+        const seekSeenTweetIds = new Set();
         let noNewContentCount = 0;
         let reachedMarker = false;
         let reachedLimit = false;
@@ -1167,12 +1206,17 @@
         const autoPause = !!options?.autoPause;
         const preloadWindow = !!options?.preloadWindow;
         const preloadBuffer = Number.isFinite(options?.preloadBuffer) && options.preloadBuffer >= 0 ? options.preloadBuffer : 50;
+        const anchorSearchCount = Number.isFinite(options?.anchorSearchCount) && options.anchorSearchCount > 0
+            ? options.anchorSearchCount
+            : ANCHOR_SEARCH_COUNT;
         let resumeFound = !resumePoint;
+        let resumeSkipId = null;
         let fallbackUsed = false;
         let seekStatusShown = false;
         let limitResumeSnapshot = null;
         let seekMode = resumePoint ? (safetyMode ? 'lock' : 'fast') : 'none';
         let lockNoticeShown = false;
+        let anchorSearchAttempted = false;
 
         console.log('[XLD] ========== 开始扫描 ==========');
         if (mode === 'marker') {
@@ -1202,16 +1246,19 @@
                 // 【关键】无论是否处理过，都要检查是否是标记点
                 if (mode === 'marker' && savedMarker) {
                     const isMarker = isMarkerTweet(tweet, savedMarker);
-                    if (isMarker) {
-                        console.log('[XLD] ✓✓✓ 找到标记点！停止扫描 ✓✓✓');
-                        reachedMarker = true;
-                        break;
-                    }
+                if (isMarker) {
+                    console.log('[XLD] ✓✓✓ 找到标记点！停止扫描 ✓✓✓');
+                    reachedMarker = true;
+                    break;
                 }
+            }
 
-                // 跳过已处理的推文（只用于媒体收集）
-                if (seenTweetIds.has(tweetId)) continue;
-                seenTweetIds.add(tweetId);
+                const seekingNow = mode === 'full' && resumePoint && !resumeFound;
+                const seenSet = seekingNow ? seekSeenTweetIds : seenTweetIds;
+
+                // 跳过已处理的推文
+                if (seenSet.has(tweetId)) continue;
+                seenSet.add(tweetId);
                 totalScanned++;
 
                 if (mode === 'full' && !resumeFound) {
@@ -1258,6 +1305,13 @@
                     console.log('[XLD] 第一条推文:', firstTweetInfo.id, firstTweetInfo.text);
                 }
 
+                if (resumeSkipId && resumePoint) {
+                    if (isResumeTweet(tweet, resumePoint)) {
+                        resumeSkipId = null;
+                    }
+                    continue;
+                }
+
                 // 提取媒体（DOM优先，API兜底）
                 const mediaItems = await extractMediaWithApiFallback(tweet, types);
                 for (const item of mediaItems) {
@@ -1295,7 +1349,9 @@
             await sleep(delayMs); // 等待推文加载
 
             // 检查是否有新推文加载
-            const currentSeenCount = seenTweetIds.size;
+            const currentSeenCount = (mode === 'full' && resumePoint && !resumeFound)
+                ? seekSeenTweetIds.size
+                : seenTweetIds.size;
             if (currentSeenCount === lastSeenCount) {
                 noNewContentCount++;
                 console.log(`[XLD] 没有新推文 (${noNewContentCount}/8)`);
@@ -1303,6 +1359,26 @@
                 noNewContentCount = 0;
             }
             lastSeenCount = currentSeenCount;
+
+            if (mode === 'full' && resumePoint && !resumeFound && anchors && !anchorSearchAttempted && noNewContentCount >= 8) {
+                anchorSearchAttempted = true;
+                const anchorResult = await searchResumeAroundAnchors(resumePoint, anchors, autoPause, anchorSearchCount);
+                if (anchorResult?.found || anchorResult?.fallback) {
+                    resumeFound = true;
+                    fallbackUsed = fallbackUsed || !!anchorResult.fallback;
+                    updateStatus(
+                        anchorResult.found
+                            ? '已在锚点附近找到续传点，开始下载...'
+                            : '续传点未出现，已从锚点附近继续下载（可能有少量重复）',
+                        null
+                    );
+                    if (anchorResult.found && resumePoint?.id) {
+                        resumeSkipId = resumePoint.id;
+                    }
+                    noNewContentCount = 0;
+                    lastSeenCount = seenTweetIds.size;
+                }
+            }
         }
 
         console.log('[XLD] ========== 扫描结束 ==========');
@@ -1376,6 +1452,105 @@
             await waitForForegroundIfNeeded(autoPause);
             window.scrollBy(0, -window.innerHeight * 2.4);
             await sleep(260);
+        }
+        return false;
+    }
+
+    async function searchResumeAroundAnchors(resumePoint, anchors, autoPause, anchorSearchCount) {
+        if (!resumePoint || !anchors) return { found: false, fallback: false };
+
+        updateStatus('续传点未出现，正在定位锚点并二次搜索...', null);
+        const anchorLocated = await scrollToAnyAnchor(anchors, autoPause);
+        if (!anchorLocated) return { found: false, fallback: false };
+
+        updateStatus('已定位锚点，正在上下搜索续传点...', null);
+        const found = await scanResumeAroundAnchor(resumePoint, autoPause, anchorSearchCount);
+        if (found) return { found: true, fallback: false };
+        return { found: false, fallback: true };
+    }
+
+    async function scrollToAnyAnchor(anchors, autoPause) {
+        const maxAttempts = 26;
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            await waitForForegroundIfNeeded(autoPause);
+            const tweets = document.querySelectorAll('[data-testid="tweet"]');
+            for (const tweet of tweets) {
+                if (matchAnchorTweet(tweet, anchors)) {
+                    tweet.scrollIntoView({ block: 'center' });
+                    await sleep(400);
+                    return true;
+                }
+            }
+            await waitForForegroundIfNeeded(autoPause);
+            window.scrollBy(0, -window.innerHeight * 2.6);
+            await sleep(260);
+        }
+        return false;
+    }
+
+    async function scanResumeAroundAnchor(resumePoint, autoPause, anchorSearchCount) {
+        const perDirection = Number.isFinite(anchorSearchCount) && anchorSearchCount > 0
+            ? anchorSearchCount
+            : ANCHOR_SEARCH_COUNT;
+        const seen = new Set();
+
+        const scanVisible = () => {
+            const tweets = document.querySelectorAll('[data-testid="tweet"]');
+            for (const tweet of tweets) {
+                const id = extractTweetId(tweet);
+                if (!id || seen.has(id)) continue;
+                seen.add(id);
+                if (isResumeTweet(tweet, resumePoint)) {
+                    return tweet;
+                }
+            }
+            return null;
+        };
+
+        let foundTweet = scanVisible();
+        if (foundTweet) {
+            foundTweet.scrollIntoView({ block: 'center' });
+            await sleep(400);
+            return true;
+        }
+
+        const scanDirection = async (direction) => {
+            let counted = 0;
+            let lastSeen = seen.size;
+            let noNewCount = 0;
+
+            while (counted < perDirection && noNewCount < 4) {
+                await waitForForegroundIfNeeded(autoPause);
+                window.scrollBy(0, direction * window.innerHeight * 1.1);
+                await sleep(320);
+
+                foundTweet = scanVisible();
+                if (foundTweet) return foundTweet;
+
+                const currentCount = seen.size;
+                const delta = currentCount - lastSeen;
+                if (delta > 0) {
+                    counted += delta;
+                    lastSeen = currentCount;
+                    noNewCount = 0;
+                } else {
+                    noNewCount++;
+                }
+            }
+            return null;
+        };
+
+        foundTweet = await scanDirection(-1);
+        if (foundTweet) {
+            foundTweet.scrollIntoView({ block: 'center' });
+            await sleep(400);
+            return true;
+        }
+        foundTweet = await scanDirection(1);
+        if (foundTweet) {
+            foundTweet.scrollIntoView({ block: 'center' });
+            await sleep(400);
+            return true;
         }
         return false;
     }
