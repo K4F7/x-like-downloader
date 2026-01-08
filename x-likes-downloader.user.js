@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Likes 下载器
 // @namespace    https://github.com/K4F7/x-like-downloader
-// @version      2.1.14
+// @version      2.1.15
 // @description  下载 X (Twitter) 点赞列表中的图片、GIF和视频
 // @author       You
 // @icon         https://abs.twimg.com/favicons/twitter.3.ico
@@ -509,11 +509,6 @@
                         <input type="number" id="xld-download-limit" class="xld-date-input" min="1" step="1">
                     </div>
                     <div class="xld-input-note xld-full-only">建议 200 个媒体/次，可自行调整</div>
-                    <div class="xld-input-row">
-                        <span class="xld-input-label">预加载缓冲</span>
-                        <input type="number" id="xld-preload-buffer" class="xld-date-input" min="0" step="1">
-                    </div>
-                    <div class="xld-input-note">标记点模式=缓冲值，全量模式=单次上限+缓冲。</div>
                     <div class="xld-input-row xld-full-only">
                         <label class="xld-checkbox-label">
                             <input type="checkbox" id="xld-safe-mode">
