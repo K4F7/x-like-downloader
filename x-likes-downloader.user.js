@@ -201,16 +201,35 @@
             border-radius: 12px;
             background: #f4212e;
             color: #fff;
-            font-size: 14px;
+            font-size: 15px;
             font-weight: 700;
             box-shadow: 0 10px 24px rgba(0,0,0,0.35);
             display: none;
-            text-align: center;
+            text-align: left;
+            align-items: center;
+            gap: 10px;
         }
         .xld-foreground-warning.active {
-            display: block;
+            display: flex;
         }
-        .xld-foreground-warning span {
+        .xld-warning-icon {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: #fff;
+            color: #f4212e;
+            font-size: 18px;
+            font-weight: 900;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 6px 14px rgba(0,0,0,0.25);
+            flex-shrink: 0;
+        }
+        .xld-warning-text {
+            line-height: 1.35;
+        }
+        .xld-warning-text span {
             font-weight: 500;
         }
         .xld-status {
@@ -431,6 +450,17 @@
                     <div class="xld-input-note">建议 200 个媒体/次，可自行调整</div>
                     <div class="xld-input-row">
                         <label class="xld-checkbox-label">
+                            <input type="checkbox" id="xld-preload-window">
+                            预加载窗口（默认开）
+                        </label>
+                    </div>
+                    <div class="xld-input-row">
+                        <span class="xld-input-label">预加载缓冲</span>
+                        <input type="number" id="xld-preload-buffer" class="xld-date-input" min="0" step="1">
+                    </div>
+                    <div class="xld-input-note">仅全量下载生效，建议 50。</div>
+                    <div class="xld-input-row">
+                        <label class="xld-checkbox-label">
                             <input type="checkbox" id="xld-safe-mode">
                             安全模式（慢速定位）
                         </label>
@@ -538,6 +568,26 @@
             });
         }
 
+        const preloadCheckbox = panel.querySelector('#xld-preload-window');
+        if (preloadCheckbox) {
+            preloadCheckbox.checked = GM_getValue('preloadWindow', true);
+            preloadCheckbox.addEventListener('change', () => {
+                GM_setValue('preloadWindow', preloadCheckbox.checked);
+            });
+        }
+
+        const preloadBufferInput = panel.querySelector('#xld-preload-buffer');
+        if (preloadBufferInput) {
+            const savedBuffer = GM_getValue('preloadBuffer', 50);
+            preloadBufferInput.value = Number.isFinite(savedBuffer) && savedBuffer >= 0 ? savedBuffer : 50;
+            preloadBufferInput.addEventListener('change', () => {
+                const value = parseInt(preloadBufferInput.value, 10);
+                const normalized = Number.isFinite(value) && value >= 0 ? value : 50;
+                preloadBufferInput.value = normalized;
+                GM_setValue('preloadBuffer', normalized);
+            });
+        }
+
         // 初始化显示
         updateModeDisplay();
 
@@ -574,7 +624,7 @@
 
     function showForegroundWarning(message) {
         ensureForegroundWarning();
-        foregroundWarningEl.innerHTML = message;
+        foregroundWarningEl.innerHTML = `<span class="xld-warning-icon">!</span><div class="xld-warning-text">${message}</div>`;
         foregroundWarningEl.classList.add('active');
     }
 
@@ -591,7 +641,7 @@
         }
 
         if (document.hidden) {
-            showForegroundWarning('当前标签页在后台，扫描/下载可能停滞。<span>请切回前台或单独拉出窗口。</span>');
+            showForegroundWarning('当前标签页在后台，已暂停。<span>请切回前台继续，建议单独拉出窗口。</span>');
             return;
         }
 
@@ -621,6 +671,19 @@
         const input = document.getElementById('xld-auto-pause');
         if (input) return input.checked;
         return GM_getValue('autoPause', true);
+    }
+
+    function getPreloadWindow() {
+        const input = document.getElementById('xld-preload-window');
+        if (input) return input.checked;
+        return GM_getValue('preloadWindow', true);
+    }
+
+    function getPreloadBuffer() {
+        const input = document.getElementById('xld-preload-buffer');
+        const value = input ? parseInt(input.value, 10) : GM_getValue('preloadBuffer', 50);
+        if (Number.isFinite(value) && value >= 0) return value;
+        return 50;
     }
 
     function updateResumeDisplay() {
@@ -983,7 +1046,14 @@
         const mode = getDownloadMode();
         const types = getSelectedTypes();
         const limit = getDownloadLimit();
-        const scanOptions = { mode, limit, safetyMode: getSafeMode(), autoPause: getAutoPause() };
+        const scanOptions = {
+            mode,
+            limit,
+            safetyMode: getSafeMode(),
+            autoPause: getAutoPause(),
+            preloadWindow: getPreloadWindow(),
+            preloadBuffer: getPreloadBuffer()
+        };
         let statusText = '开始扫描...';
 
         if (mode === 'marker') {
@@ -1095,6 +1165,8 @@
         const limit = Number.isFinite(options?.limit) && options.limit > 0 ? options.limit : Infinity;
         const safetyMode = !!options?.safetyMode;
         const autoPause = !!options?.autoPause;
+        const preloadWindow = !!options?.preloadWindow;
+        const preloadBuffer = Number.isFinite(options?.preloadBuffer) && options.preloadBuffer >= 0 ? options.preloadBuffer : 50;
         let resumeFound = !resumePoint;
         let fallbackUsed = false;
         let seekStatusShown = false;
@@ -1107,6 +1179,11 @@
             console.log('[XLD] 标记点信息:', JSON.stringify(savedMarker, null, 2));
         } else {
             console.log('[XLD] 全量下载模式，续传点:', JSON.stringify(resumePoint, null, 2));
+        }
+
+        if (mode === 'full' && preloadWindow && !resumePoint && Number.isFinite(limit) && limit > 0) {
+            const preloadTarget = limit + preloadBuffer;
+            await preloadWindowBeforeScan(preloadTarget, autoPause);
         }
 
         while (noNewContentCount < 8 && !reachedMarker && !reachedLimit) {
@@ -1213,6 +1290,7 @@
                     ? window.innerHeight * 0.6
                     : window.innerHeight * 0.8;
             const delayMs = fastSeeking ? 200 : slowSeeking ? 900 : 800;
+            await waitForForegroundIfNeeded(autoPause);
             window.scrollBy(0, scrollStep);
             await sleep(delayMs); // 等待推文加载
 
@@ -1236,6 +1314,70 @@
         if (reachedMarker) return { stopReason: 'marker', resumePoint: null, fallbackUsed };
         if (reachedLimit) return { stopReason: 'limit', resumePoint: null, resumeSnapshot: limitResumeSnapshot, fallbackUsed };
         return { stopReason: 'end', resumePoint: null, resumeSnapshot: null, fallbackUsed };
+    }
+
+    async function preloadWindowBeforeScan(targetCount, autoPause) {
+        if (!Number.isFinite(targetCount) || targetCount <= 0) return;
+
+        const startTweet = document.querySelector('[data-testid="tweet"]');
+        const startPoint = startTweet ? extractTweetInfo(startTweet) : null;
+        const seen = new Set();
+        let lastSeenCount = 0;
+        let noNewCount = 0;
+
+        updateStatus(`预加载窗口中... 0/${targetCount} 条`, null);
+
+        while (seen.size < targetCount && noNewCount < 6) {
+            await waitForForegroundIfNeeded(autoPause);
+            const tweets = document.querySelectorAll('[data-testid="tweet"]');
+            for (const tweet of tweets) {
+                const id = extractTweetId(tweet);
+                if (id) seen.add(id);
+            }
+
+            const currentCount = seen.size;
+            if (currentCount === lastSeenCount) {
+                noNewCount++;
+            } else {
+                noNewCount = 0;
+            }
+            lastSeenCount = currentCount;
+
+            updateStatus(`预加载窗口中... ${Math.min(currentCount, targetCount)}/${targetCount} 条`, null);
+            await waitForForegroundIfNeeded(autoPause);
+            window.scrollBy(0, window.innerHeight * 2.6);
+            await sleep(220);
+        }
+
+        updateStatus('预加载完成，正在回到起始位置...', null);
+        let returned = false;
+        if (startPoint && startPoint.id) {
+            returned = await scrollToSavedPoint(startPoint, autoPause, '起始点');
+        }
+        if (!returned) {
+            window.scrollTo(0, 0);
+            await sleep(600);
+        }
+    }
+
+    async function scrollToSavedPoint(savedPoint, autoPause, label) {
+        if (!savedPoint || !savedPoint.id) return false;
+        const maxAttempts = 24;
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            await waitForForegroundIfNeeded(autoPause);
+            const tweets = document.querySelectorAll('[data-testid="tweet"]');
+            for (const tweet of tweets) {
+                if (isMatchTweet(tweet, savedPoint, label)) {
+                    tweet.scrollIntoView({ block: 'center' });
+                    await sleep(400);
+                    return true;
+                }
+            }
+            await waitForForegroundIfNeeded(autoPause);
+            window.scrollBy(0, -window.innerHeight * 2.4);
+            await sleep(260);
+        }
+        return false;
     }
 
     function extractMediaFromTweet(tweet, types) {
