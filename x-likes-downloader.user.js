@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Likes 下载器
 // @namespace    https://github.com/K4F7/x-like-downloader
-// @version      2.1.4
+// @version      2.1.6
 // @description  下载 X (Twitter) 点赞列表中的图片、GIF和视频
 // @author       You
 // @icon         https://abs.twimg.com/favicons/twitter.3.ico
@@ -233,41 +233,65 @@
             left: 50%;
             transform: translate(-50%, -50%);
             z-index: 10000;
-            max-width: 92%;
-            padding: 12px 16px;
-            border-radius: 12px;
+            width: min(420px, 92%);
+            padding: 18px 16px 16px;
+            border-radius: 16px;
             background: #f4212e;
             color: #fff;
             font-size: 15px;
             font-weight: 700;
             box-shadow: 0 10px 24px rgba(0,0,0,0.35);
             display: none;
-            text-align: left;
+            text-align: center;
+            flex-direction: column;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
         }
         .xld-foreground-warning.active {
             display: flex;
         }
         .xld-warning-icon {
-            width: 28px;
-            height: 28px;
-            border-radius: 50%;
+            width: 72px;
+            height: 64px;
             background: #fff;
             color: #f4212e;
-            font-size: 18px;
+            clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
+            font-size: 28px;
             font-weight: 900;
             display: flex;
             align-items: center;
             justify-content: center;
-            box-shadow: 0 6px 14px rgba(0,0,0,0.25);
+            box-shadow: 0 8px 18px rgba(0,0,0,0.3);
             flex-shrink: 0;
         }
-        .xld-warning-text {
-            line-height: 1.35;
+        .xld-warning-icon span {
+            position: relative;
+            top: 6px;
         }
-        .xld-warning-text span {
+        .xld-warning-message {
+            line-height: 1.35;
+            font-size: 14px;
+        }
+        .xld-warning-message span {
             font-weight: 500;
+        }
+        .xld-warning-status {
+            font-size: 13px;
+            font-weight: 600;
+            opacity: 0.95;
+        }
+        .xld-warning-progress {
+            width: 100%;
+            height: 6px;
+            background: rgba(255,255,255,0.25);
+            border-radius: 999px;
+            overflow: hidden;
+        }
+        .xld-warning-progress-bar {
+            height: 100%;
+            width: 0%;
+            background: #fff;
+            transition: width 0.3s;
         }
         .xld-status {
             margin-top: 16px;
@@ -439,6 +463,8 @@
     let pendingResumeSnapshot = null;
     let isDownloading = false;
     let foregroundWarningEl = null;
+    let lastStatusText = '准备就绪';
+    let lastProgressValue = null;
 
     // ========== UI ==========
     function createPanel() {
@@ -657,7 +683,41 @@
 
     function showForegroundWarning(message) {
         ensureForegroundWarning();
-        foregroundWarningEl.innerHTML = `<span class="xld-warning-icon">!</span><div class="xld-warning-text">${message}</div>`;
+        if (!foregroundWarningEl.dataset.ready) {
+            foregroundWarningEl.innerHTML = `
+                <div class="xld-warning-icon"><span>!</span></div>
+                <div class="xld-warning-message"></div>
+                <div class="xld-warning-status"></div>
+                <div class="xld-warning-progress">
+                    <div class="xld-warning-progress-bar"></div>
+                </div>
+            `;
+            foregroundWarningEl.dataset.ready = 'true';
+        }
+
+        const messageEl = foregroundWarningEl.querySelector('.xld-warning-message');
+        if (messageEl) messageEl.innerHTML = message;
+
+        const statusEl = foregroundWarningEl.querySelector('.xld-warning-status');
+        if (statusEl) {
+            const text = lastStatusText || '';
+            statusEl.textContent = text;
+            statusEl.style.display = text ? 'block' : 'none';
+        }
+
+        const progressWrap = foregroundWarningEl.querySelector('.xld-warning-progress');
+        const progressBar = foregroundWarningEl.querySelector('.xld-warning-progress-bar');
+        if (progressWrap && progressBar) {
+            if (typeof lastProgressValue === 'number') {
+                const normalized = Math.max(0, Math.min(lastProgressValue, 100));
+                progressWrap.style.display = 'block';
+                progressBar.style.width = `${normalized}%`;
+            } else {
+                progressWrap.style.display = 'none';
+                progressBar.style.width = '0%';
+            }
+        }
+
         foregroundWarningEl.classList.add('active');
     }
 
@@ -682,8 +742,6 @@
     }
 
     function getDownloadMode() {
-        const activeButton = document.querySelector('.xld-mode-btn.is-active');
-        if (activeButton && activeButton.dataset.mode) return activeButton.dataset.mode;
         return GM_getValue('downloadMode', 'marker');
     }
 
@@ -752,7 +810,8 @@
     }
 
     function updateModeDisplay() {
-        updateModeToggle(getDownloadMode());
+        const mode = GM_getValue('downloadMode', 'marker');
+        updateModeToggle(mode);
         updateMarkerDisplay();
         updateResumeDisplay();
     }
@@ -1074,9 +1133,15 @@
 
         statusDiv.classList.add('active');
         statusText.textContent = text;
+        lastStatusText = text;
 
         if (progress !== null) {
             progressBar.style.width = `${progress}%`;
+            lastProgressValue = progress;
+        }
+
+        if (isScanning || isDownloading) {
+            updateForegroundWarning();
         }
     }
 
