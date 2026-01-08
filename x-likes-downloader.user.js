@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Likes 下载器
 // @namespace    https://github.com/K4F7/x-like-downloader
-// @version      1.2.2
+// @version      1.2.3
 // @description  下载 X (Twitter) 点赞列表中的图片、GIF和视频
 // @author       You
 // @icon         https://abs.twimg.com/favicons/twitter.3.ico
@@ -837,8 +837,8 @@
                     console.log('[XLD] 第一条推文:', firstTweetInfo.id, firstTweetInfo.text);
                 }
 
-                // 提取媒体
-                const mediaItems = extractMediaFromTweet(tweet, types);
+                // 提取媒体（DOM优先，API兜底）
+                const mediaItems = await extractMediaWithApiFallback(tweet, types);
                 for (const item of mediaItems) {
                     if (!seenUrls.has(item.url)) {
                         seenUrls.add(item.url);
@@ -930,6 +930,50 @@
         }
 
         return media;
+    }
+
+    async function extractMediaWithApiFallback(tweet, types) {
+        const domMedia = extractMediaFromTweet(tweet, types);
+        const tweetId = extractTweetId(tweet);
+        if (!tweetId) return domMedia;
+
+        const shouldFetchApi = types.video || domMedia.length === 0;
+        if (!shouldFetchApi) return domMedia;
+
+        try {
+            const tweetData = await fetchTweetByApi(tweetId);
+            if (!tweetData) return domMedia;
+
+            const apiResult = extractMediaFromApi(tweetData);
+            const apiMedia = Array.isArray(apiResult?.media) ? apiResult.media : [];
+            const filteredApi = apiMedia
+                .filter(item => {
+                    if (item.type === 'image') return types.image;
+                    if (item.type === 'gif') return types.gif;
+                    if (item.type === 'video') return types.video;
+                    return false;
+                })
+                .map((item, index) => ({
+                    type: item.type,
+                    url: item.url,
+                    filename: item.filename || `${tweetId}_${item.type}_${index}`,
+                    tweetId
+                }));
+
+            if (types.video) {
+                const apiVideos = filteredApi.filter(item => item.type === 'video');
+                if (apiVideos.length > 0) {
+                    const nonVideoDom = domMedia.filter(item => item.type !== 'video');
+                    return [...nonVideoDom, ...apiVideos];
+                }
+            }
+
+            if (domMedia.length > 0) return domMedia;
+            return filteredApi;
+        } catch (error) {
+            console.warn('[XLD] API媒体提取失败:', tweetId, error);
+            return domMedia;
+        }
     }
 
     function extractTweetId(tweet) {
