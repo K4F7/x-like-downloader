@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Likes 下载器
 // @namespace    https://github.com/K4F7/x-like-downloader
-// @version      1.2.0
+// @version      1.2.1
 // @description  下载 X (Twitter) 点赞列表中的图片、GIF和视频
 // @author       You
 // @match        https://x.com/*
@@ -381,7 +381,6 @@
                     <button class="xld-btn xld-btn-primary" id="xld-download-btn" style="display:none">
                         下载全部
                     </button>
-                    <button class="xld-btn xld-btn-secondary" id="xld-test-api-btn">测试 API</button>
                 </div>
                 <div class="xld-status" id="xld-status">
                     <span id="xld-status-text">准备就绪</span>
@@ -403,7 +402,6 @@
         panel.querySelector('#xld-init-btn').addEventListener('click', initMarker);
         panel.querySelector('#xld-init-select-btn').addEventListener('click', () => enterSelectMode());
         panel.querySelector('#xld-select-marker-btn').addEventListener('click', () => enterSelectMode());
-        panel.querySelector('#xld-test-api-btn').addEventListener('click', testApiAccess);
 
         // 初始化标记状态显示
         updateMarkerDisplay();
@@ -1292,63 +1290,6 @@
             text: tweet?.full_text?.substring(0, 100) || '',
             media
         };
-    }
-
-    async function testApiAccess() {
-        const testBtn = document.getElementById('xld-test-api-btn');
-        testBtn.disabled = true;
-        testBtn.textContent = '测试中...';
-        updateStatus('正在测试 API 访问...', 0);
-
-        try {
-            // 获取页面上第一条推文的 ID
-            const tweets = document.querySelectorAll('[data-testid="tweet"]');
-            if (tweets.length === 0) {
-                updateStatus('未找到推文，请确保在 Likes 页面', 0);
-                testBtn.disabled = false;
-                testBtn.textContent = '测试 API';
-                return;
-            }
-
-            const firstTweetId = extractTweetId(tweets[0]);
-            if (!firstTweetId) {
-                updateStatus('无法提取推文 ID', 0);
-                testBtn.disabled = false;
-                testBtn.textContent = '测试 API';
-                return;
-            }
-
-            console.log('[XLD] 测试 API - 推文 ID:', firstTweetId);
-            updateStatus(`正在通过 API 获取推文 ${firstTweetId}...`, 30);
-
-            const tweetData = await fetchTweetByApi(firstTweetId);
-            console.log('[XLD] API 返回数据:', tweetData);
-
-            const result = extractMediaFromApi(tweetData);
-            console.log('[XLD] 提取的媒体:', result);
-
-            if (result.media.length > 0) {
-                const mediaInfo = result.media.map(m => {
-                    if (m.type === 'video') {
-                        return `${m.type} (${Math.round((m.bitrate || 0) / 1000)}kbps)`;
-                    }
-                    return m.type;
-                }).join(', ');
-
-                updateStatus(`✓ API 可用！用户: ${result.user}\n媒体: ${mediaInfo}`, 100);
-                console.log('[XLD] ✓ API 测试成功！');
-                console.log('[XLD] 媒体 URL:', result.media.map(m => m.url));
-            } else {
-                updateStatus(`✓ API 可用！用户: ${result.user}\n该推文无媒体`, 100);
-            }
-
-        } catch (error) {
-            console.error('[XLD] API 测试失败:', error);
-            updateStatus(`✗ API 测试失败: ${error.message}`, 0);
-        }
-
-        testBtn.disabled = false;
-        testBtn.textContent = '测试 API';
     }
 
     // ========== 初始化 ==========
