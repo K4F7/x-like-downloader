@@ -381,6 +381,7 @@
                     <button class="xld-btn xld-btn-primary" id="xld-download-btn" style="display:none">
                         下载全部
                     </button>
+                    <button class="xld-btn xld-btn-secondary" id="xld-test-api-btn">测试 API</button>
                 </div>
                 <div class="xld-status" id="xld-status">
                     <span id="xld-status-text">准备就绪</span>
@@ -402,6 +403,7 @@
         panel.querySelector('#xld-init-btn').addEventListener('click', initMarker);
         panel.querySelector('#xld-init-select-btn').addEventListener('click', () => enterSelectMode());
         panel.querySelector('#xld-select-marker-btn').addEventListener('click', () => enterSelectMode());
+        panel.querySelector('#xld-test-api-btn').addEventListener('click', testApiAccess);
 
         // 初始化标记状态显示
         updateMarkerDisplay();
@@ -1157,6 +1159,178 @@
     // ========== 工具函数 ==========
     function sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    // ========== API 相关 ==========
+    function getCookies() {
+        const cookies = {};
+        document.cookie.split(';').filter(n => n.indexOf('=') > 0).forEach(n => {
+            n.replace(/^([^=]+)=(.+)$/, (match, name, value) => {
+                cookies[name.trim()] = value.trim();
+            });
+        });
+        return cookies;
+    }
+
+    async function fetchTweetByApi(tweetId) {
+        const baseUrl = 'https://x.com/i/api/graphql/2ICDjqPd81tulZcYrtpTuQ/TweetResultByRestId';
+        const variables = {
+            'tweetId': tweetId,
+            'with_rux_injections': false,
+            'includePromotedContent': true,
+            'withCommunity': true,
+            'withQuickPromoteEligibilityTweetFields': true,
+            'withBirdwatchNotes': true,
+            'withVoice': true,
+            'withV2Timeline': true
+        };
+        const features = {
+            'articles_preview_enabled': true,
+            'c9s_tweet_anatomy_moderator_badge_enabled': true,
+            'communities_web_enable_tweet_community_results_fetch': false,
+            'creator_subscriptions_quote_tweet_preview_enabled': false,
+            'creator_subscriptions_tweet_preview_api_enabled': false,
+            'freedom_of_speech_not_reach_fetch_enabled': true,
+            'graphql_is_translatable_rweb_tweet_is_translatable_enabled': true,
+            'longform_notetweets_consumption_enabled': false,
+            'longform_notetweets_inline_media_enabled': true,
+            'longform_notetweets_rich_text_read_enabled': false,
+            'premium_content_api_read_enabled': false,
+            'profile_label_improvements_pcf_label_in_post_enabled': true,
+            'responsive_web_edit_tweet_api_enabled': false,
+            'responsive_web_enhance_cards_enabled': false,
+            'responsive_web_graphql_exclude_directive_enabled': false,
+            'responsive_web_graphql_skip_user_profile_image_extensions_enabled': false,
+            'responsive_web_graphql_timeline_navigation_enabled': false,
+            'responsive_web_media_download_video_enabled': false,
+            'responsive_web_twitter_article_tweet_consumption_enabled': true,
+            'rweb_tipjar_consumption_enabled': true,
+            'rweb_video_screen_enabled': false,
+            'standardized_nudges_misinfo': true,
+            'tweet_awards_web_tipping_enabled': false,
+            'tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled': true,
+            'tweetypie_unmention_optimization_enabled': false,
+            'verified_phone_label_enabled': false,
+            'view_counts_everywhere_api_enabled': true
+        };
+
+        const url = encodeURI(`${baseUrl}?variables=${JSON.stringify(variables)}&features=${JSON.stringify(features)}`);
+        const cookies = getCookies();
+        const headers = {
+            'authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA',
+            'x-twitter-active-user': 'yes',
+            'x-twitter-client-language': cookies.lang || 'en',
+            'x-csrf-token': cookies.ct0
+        };
+
+        if (cookies.ct0 && cookies.ct0.length === 32) {
+            headers['x-guest-token'] = cookies.gt;
+        }
+
+        const response = await fetch(url, { headers });
+        const json = await response.json();
+
+        if (json.errors) {
+            throw new Error(json.errors[0].message);
+        }
+
+        const tweetResult = json.data?.tweetResult?.result;
+        return tweetResult?.tweet || tweetResult;
+    }
+
+    function extractMediaFromApi(tweetData) {
+        const media = [];
+        const tweet = tweetData.legacy;
+        const user = tweetData.core?.user_results?.result?.legacy;
+        const extendedMedia = tweet?.extended_entities?.media || [];
+
+        extendedMedia.forEach((item, index) => {
+            if (item.type === 'photo') {
+                media.push({
+                    type: 'image',
+                    url: item.media_url_https + ':orig',
+                    filename: `${tweet.id_str}_img_${index}.jpg`
+                });
+            } else if (item.type === 'video' || item.type === 'animated_gif') {
+                // 获取最高码率的视频
+                const variants = item.video_info?.variants || [];
+                const mp4Variants = variants.filter(v => v.content_type === 'video/mp4');
+                const bestVariant = mp4Variants.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+
+                if (bestVariant) {
+                    const ext = item.type === 'animated_gif' ? 'gif.mp4' : 'mp4';
+                    media.push({
+                        type: item.type === 'animated_gif' ? 'gif' : 'video',
+                        url: bestVariant.url.split('?')[0], // 移除查询参数
+                        bitrate: bestVariant.bitrate,
+                        filename: `${tweet.id_str}_${item.type === 'animated_gif' ? 'gif' : 'video'}_${index}.${ext}`
+                    });
+                }
+            }
+        });
+
+        return {
+            user: user ? `${user.name} (@${user.screen_name})` : 'Unknown',
+            text: tweet?.full_text?.substring(0, 100) || '',
+            media
+        };
+    }
+
+    async function testApiAccess() {
+        const testBtn = document.getElementById('xld-test-api-btn');
+        testBtn.disabled = true;
+        testBtn.textContent = '测试中...';
+        updateStatus('正在测试 API 访问...', 0);
+
+        try {
+            // 获取页面上第一条推文的 ID
+            const tweets = document.querySelectorAll('[data-testid="tweet"]');
+            if (tweets.length === 0) {
+                updateStatus('未找到推文，请确保在 Likes 页面', 0);
+                testBtn.disabled = false;
+                testBtn.textContent = '测试 API';
+                return;
+            }
+
+            const firstTweetId = extractTweetId(tweets[0]);
+            if (!firstTweetId) {
+                updateStatus('无法提取推文 ID', 0);
+                testBtn.disabled = false;
+                testBtn.textContent = '测试 API';
+                return;
+            }
+
+            console.log('[XLD] 测试 API - 推文 ID:', firstTweetId);
+            updateStatus(`正在通过 API 获取推文 ${firstTweetId}...`, 30);
+
+            const tweetData = await fetchTweetByApi(firstTweetId);
+            console.log('[XLD] API 返回数据:', tweetData);
+
+            const result = extractMediaFromApi(tweetData);
+            console.log('[XLD] 提取的媒体:', result);
+
+            if (result.media.length > 0) {
+                const mediaInfo = result.media.map(m => {
+                    if (m.type === 'video') {
+                        return `${m.type} (${Math.round((m.bitrate || 0) / 1000)}kbps)`;
+                    }
+                    return m.type;
+                }).join(', ');
+
+                updateStatus(`✓ API 可用！用户: ${result.user}\n媒体: ${mediaInfo}`, 100);
+                console.log('[XLD] ✓ API 测试成功！');
+                console.log('[XLD] 媒体 URL:', result.media.map(m => m.url));
+            } else {
+                updateStatus(`✓ API 可用！用户: ${result.user}\n该推文无媒体`, 100);
+            }
+
+        } catch (error) {
+            console.error('[XLD] API 测试失败:', error);
+            updateStatus(`✗ API 测试失败: ${error.message}`, 0);
+        }
+
+        testBtn.disabled = false;
+        testBtn.textContent = '测试 API';
     }
 
     // ========== 初始化 ==========
