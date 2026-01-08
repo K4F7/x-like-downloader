@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Likes 下载器
 // @namespace    https://github.com/K4F7/x-like-downloader
-// @version      2.1.13
+// @version      2.1.14
 // @description  下载 X (Twitter) 点赞列表中的图片、GIF和视频
 // @author       You
 // @icon         https://abs.twimg.com/favicons/twitter.3.ico
@@ -510,12 +510,6 @@
                     </div>
                     <div class="xld-input-note xld-full-only">建议 200 个媒体/次，可自行调整</div>
                     <div class="xld-input-row">
-                        <label class="xld-checkbox-label">
-                            <input type="checkbox" id="xld-preload-window">
-                            预加载窗口
-                        </label>
-                    </div>
-                    <div class="xld-input-row">
                         <span class="xld-input-label">预加载缓冲</span>
                         <input type="number" id="xld-preload-buffer" class="xld-date-input" min="0" step="1">
                     </div>
@@ -623,14 +617,6 @@
             autoPauseCheckbox.checked = GM_getValue('autoPause', true);
             autoPauseCheckbox.addEventListener('change', () => {
                 GM_setValue('autoPause', autoPauseCheckbox.checked);
-            });
-        }
-
-        const preloadCheckbox = panel.querySelector('#xld-preload-window');
-        if (preloadCheckbox) {
-            preloadCheckbox.checked = GM_getValue('preloadWindow', true);
-            preloadCheckbox.addEventListener('change', () => {
-                GM_setValue('preloadWindow', preloadCheckbox.checked);
             });
         }
 
@@ -764,9 +750,10 @@
     }
 
     function getPreloadWindow() {
-        const input = document.getElementById('xld-preload-window');
-        if (input) return input.checked;
-        return GM_getValue('preloadWindow', true);
+        if (!GM_getValue('preloadWindow', true)) {
+            GM_setValue('preloadWindow', true);
+        }
+        return true;
     }
 
     function getPreloadBuffer() {
