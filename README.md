@@ -27,7 +27,7 @@ Tampermonkey 是一个浏览器扩展，用于运行用户脚本。
 
 **方法一：从 Greasyfork 安装（推荐）**
 
-访问 [Greasyfork 页面](https://greasyfork.org/scripts/xxx) 点击安装
+访问 [Greasyfork 页面](https://greasyfork.org/zh-CN/scripts/your-script-id) 点击安装（发布后更新链接）
 
 **方法二：手动安装**
 

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         X Likes 下载器
-// @namespace    https://github.com/your-username/x-likes-downloader
+// @namespace    https://github.com/K4F7/x-like-downloader
 // @version      1.0.0
 // @description  下载 X (Twitter) 点赞列表中的图片、GIF和视频
 // @author       You
