@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Likes 下载器
 // @namespace    https://github.com/K4F7/x-like-downloader
-// @version      2.1.10
+// @version      2.1.12
 // @description  下载 X (Twitter) 点赞列表中的图片、GIF和视频
 // @author       You
 // @icon         https://abs.twimg.com/favicons/twitter.3.ico
@@ -343,6 +343,17 @@
             font-size: 12px;
             color: #8b98a5;
         }
+        .xld-fallback-wrap {
+            margin-top: 12px;
+            padding-top: 10px;
+            border-top: 1px dashed #38444d;
+        }
+        .xld-fallback-label {
+            font-size: 12px;
+            color: #f6c343;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
         .xld-marker-header {
             display: flex;
             justify-content: space-between;
@@ -430,12 +441,13 @@
 
     // ========== 状态 ==========
     const RESUME_ANCHOR_COUNT = 10;
-    const ANCHOR_SEARCH_COUNT = 60;
+    const ANCHOR_SEARCH_COUNT = 30;
     let isScanning = false;
     let collectedMedia = [];
     let lastScanMode = 'marker';
     let lastScanStopReason = null;
     let pendingResumeSnapshot = null;
+    let lastFallbackAnchor = null;
     let isDownloading = false;
     let foregroundWarningEl = null;
     let lastStatusText = '准备就绪';
@@ -466,6 +478,10 @@
                     <div class="xld-marker-info" id="xld-resume-info">
                         <span class="xld-marker-empty">未设置续传点</span>
                     </div>
+                    <div class="xld-fallback-wrap" id="xld-fallback-wrap" style="display:none">
+                        <div class="xld-fallback-label">自动回退锚点</div>
+                        <div class="xld-marker-info" id="xld-fallback-info"></div>
+                    </div>
                 </div>
                 <div class="xld-section xld-marker-only">
                     <div class="xld-marker-header">
@@ -493,17 +509,17 @@
                         <input type="number" id="xld-download-limit" class="xld-date-input" min="1" step="1">
                     </div>
                     <div class="xld-input-note xld-full-only">建议 200 个媒体/次，可自行调整</div>
-                    <div class="xld-input-row xld-full-only">
+                    <div class="xld-input-row">
                         <label class="xld-checkbox-label">
                             <input type="checkbox" id="xld-preload-window">
                             预加载窗口
                         </label>
                     </div>
-                    <div class="xld-input-row xld-full-only">
+                    <div class="xld-input-row">
                         <span class="xld-input-label">预加载缓冲</span>
                         <input type="number" id="xld-preload-buffer" class="xld-date-input" min="0" step="1">
                     </div>
-                    <div class="xld-input-note xld-full-only">仅全量下载生效，建议 50。</div>
+                    <div class="xld-input-note">标记点模式=缓冲值，全量模式=单次上限+缓冲。</div>
                     <div class="xld-input-row xld-full-only">
                         <label class="xld-checkbox-label">
                             <input type="checkbox" id="xld-safe-mode">
@@ -793,6 +809,43 @@
         }
     }
 
+    function clearFallbackAnchorDisplay() {
+        lastFallbackAnchor = null;
+        const wrap = document.getElementById('xld-fallback-wrap');
+        const info = document.getElementById('xld-fallback-info');
+        if (info) info.innerHTML = '';
+        if (wrap) wrap.style.display = 'none';
+    }
+
+    function updateFallbackAnchorDisplay(anchorInfo) {
+        const wrap = document.getElementById('xld-fallback-wrap');
+        const info = document.getElementById('xld-fallback-info');
+        if (!wrap || !info) return;
+
+        if (!anchorInfo || !anchorInfo.id) {
+            clearFallbackAnchorDisplay();
+            return;
+        }
+
+        lastFallbackAnchor = anchorInfo;
+        const shortId = anchorInfo.id.substring(0, 8) + '...';
+        const rawText = anchorInfo.text || anchorInfo.fullText || '(无文字内容)';
+        const displayText = rawText.length > 50 ? `${rawText.substring(0, 50)}...` : rawText;
+        let thumbHtml = '';
+        if (anchorInfo.thumbnail) {
+            thumbHtml = `<img class="xld-marker-thumb" src="${anchorInfo.thumbnail}" alt="缩略图">`;
+        }
+
+        info.innerHTML = `
+            ${thumbHtml}
+            <div class="xld-marker-text">
+                <div class="xld-marker-title" title="${rawText}">${displayText}</div>
+                <div class="xld-marker-id">ID: ${shortId}</div>
+            </div>
+        `;
+        wrap.style.display = 'block';
+    }
+
     function updateModeDisplay() {
         const mode = GM_getValue('downloadMode', 'marker');
         updateModeToggle(mode);
@@ -885,6 +938,7 @@
         GM_setValue('fullResumePoint', null);
         GM_setValue('fullResumeSnapshot', null);
         updateResumeDisplay();
+        clearFallbackAnchorDisplay();
         updateStatus('续传点已清除');
     }
 
@@ -975,6 +1029,7 @@
                 GM_setValue('fullResumeSnapshot', snapshot);
                 exitSelectMode();
                 updateResumeDisplay();
+                clearFallbackAnchorDisplay();
                 updateStatus('续传点已设置');
             } else {
                 GM_setValue('markerTweetId', selectedData);
@@ -1204,6 +1259,7 @@
         lastScanMode = mode;
         lastScanStopReason = null;
         pendingResumeSnapshot = null;
+        clearFallbackAnchorDisplay();
         collectedMedia = [];
         firstTweetInfo = null;
 
@@ -1307,6 +1363,7 @@
         let seekMode = resumePoint ? (safetyMode ? 'lock' : 'fast') : 'none';
         let lockNoticeShown = false;
         let anchorSearchAttempted = false;
+        let anchorSearchQueued = null;
 
         console.log('[XLD] ========== 开始扫描 ==========');
         if (mode === 'marker') {
@@ -1315,9 +1372,16 @@
             console.log('[XLD] 全量下载模式，续传点:', JSON.stringify(resumePoint, null, 2));
         }
 
-        if (mode === 'full' && preloadWindow && !resumePoint && Number.isFinite(limit) && limit > 0) {
-            const preloadTarget = limit + preloadBuffer;
-            await preloadWindowBeforeScan(preloadTarget, autoPause);
+        if (preloadWindow) {
+            let preloadTarget = 0;
+            if (mode === 'full' && !resumePoint && Number.isFinite(limit) && limit > 0) {
+                preloadTarget = limit + preloadBuffer;
+            } else if (mode === 'marker') {
+                preloadTarget = preloadBuffer;
+            }
+            if (preloadTarget > 0) {
+                await preloadWindowBeforeScan(preloadTarget, autoPause);
+            }
         }
 
         while (noNewContentCount < 8 && !reachedMarker && !reachedLimit) {
@@ -1329,49 +1393,48 @@
             for (const tweet of tweets) {
                 await waitForForegroundIfNeeded(autoPause);
                 const tweetId = extractTweetId(tweet);
-
-                // 如果无法提取ID，跳过
-                if (!tweetId) continue;
+                const anchorMatch = anchors ? matchAnchorTweet(tweet, anchors) : null;
 
                 // 【关键】无论是否处理过，都要检查是否是标记点
                 if (mode === 'marker' && savedMarker) {
                     const isMarker = isMarkerTweet(tweet, savedMarker);
-                if (isMarker) {
-                    console.log('[XLD] ✓✓✓ 找到标记点！停止扫描 ✓✓✓');
-                    reachedMarker = true;
-                    break;
+                    if (isMarker) {
+                        console.log('[XLD] ✓✓✓ 找到标记点！停止扫描 ✓✓✓');
+                        reachedMarker = true;
+                        break;
+                    }
                 }
-            }
 
                 const seekingNow = mode === 'full' && resumePoint && !resumeFound;
                 const seenSet = seekingNow ? seekSeenTweetIds : seenTweetIds;
 
                 // 跳过已处理的推文
-                if (seenSet.has(tweetId)) continue;
-                seenSet.add(tweetId);
-                totalScanned++;
+                if (tweetId) {
+                    if (seenSet.has(tweetId)) continue;
+                    seenSet.add(tweetId);
+                    totalScanned++;
+                } else if (seekingNow) {
+                    totalScanned++;
+                } else {
+                    continue;
+                }
 
                 if (mode === 'full' && !resumeFound) {
                     if (!seekStatusShown) {
                         updateStatus('正在定位续传点...', null);
                         seekStatusShown = true;
                     }
-                    let anchorSide = null;
-                    if (anchors) {
-                        anchorSide = matchAnchorTweet(tweet, anchors);
-                    }
-                    if (anchorSide === 'before') {
-                        fallbackUsed = true;
-                        resumeFound = true;
-                        updateStatus('续传点未出现，已使用锚点继续下载（可能有少量重复）', null);
-                        continue;
-                    }
-                    if (seekMode === 'fast' && anchorSide) {
+                    if (seekMode === 'fast' && anchorMatch?.side) {
                         seekMode = 'lock';
                         if (!lockNoticeShown) {
                             updateStatus('已定位到快照区间，正在精确定位续传点...', null);
                             lockNoticeShown = true;
                         }
+                    }
+                    if (anchorMatch?.side === 'after' && anchors && !anchorSearchAttempted) {
+                        anchorSearchAttempted = true;
+                        anchorSearchQueued = anchorMatch;
+                        break;
                     }
                     if (isResumeTweet(tweet, resumePoint)) {
                         resumeFound = true;
@@ -1422,6 +1485,37 @@
                 updateStatus(`已扫描 ${totalScanned} 条推文，找到 ${collectedMedia.length} 个文件...`, null);
             }
 
+            if (anchorSearchQueued && mode === 'full' && resumePoint && !resumeFound && anchors) {
+                const anchorResult = await searchResumeAroundAnchors(
+                    resumePoint,
+                    anchors,
+                    autoPause,
+                    anchorSearchCount,
+                    anchorSearchQueued.side
+                );
+                anchorSearchQueued = null;
+                if (anchorResult?.found || anchorResult?.fallback) {
+                    resumeFound = true;
+                    fallbackUsed = fallbackUsed || !!anchorResult.fallback;
+                    if (anchorResult.fallback) {
+                        if (anchorResult.anchorInfo) {
+                            updateFallbackAnchorDisplay(anchorResult.anchorInfo);
+                        }
+                        updateStatus('续传点未出现，已自动回退到锚点（见上方缩略图），建议点击“选择”手动指定续传点', null);
+                    } else {
+                        updateStatus('已在锚点附近找到续传点，开始下载...', null);
+                    }
+                    if (anchorResult.found && resumePoint?.id) {
+                        resumeSkipId = resumePoint.id;
+                    }
+                    noNewContentCount = 0;
+                    lastSeenCount = seenTweetIds.size;
+                    continue;
+                } else {
+                    anchorSearchAttempted = false;
+                }
+            }
+
             if (reachedMarker || reachedLimit) break;
 
             // 根据是否在定位续传点调整滚动速度
@@ -1452,16 +1546,18 @@
 
             if (mode === 'full' && resumePoint && !resumeFound && anchors && !anchorSearchAttempted && noNewContentCount >= 8) {
                 anchorSearchAttempted = true;
-                const anchorResult = await searchResumeAroundAnchors(resumePoint, anchors, autoPause, anchorSearchCount);
+                const anchorResult = await searchResumeAroundAnchors(resumePoint, anchors, autoPause, anchorSearchCount, null);
                 if (anchorResult?.found || anchorResult?.fallback) {
                     resumeFound = true;
                     fallbackUsed = fallbackUsed || !!anchorResult.fallback;
-                    updateStatus(
-                        anchorResult.found
-                            ? '已在锚点附近找到续传点，开始下载...'
-                            : '续传点未出现，已从锚点附近继续下载（可能有少量重复）',
-                        null
-                    );
+                    if (anchorResult.fallback) {
+                        if (anchorResult.anchorInfo) {
+                            updateFallbackAnchorDisplay(anchorResult.anchorInfo);
+                        }
+                        updateStatus('续传点未出现，已自动回退到锚点（见上方缩略图），建议点击“选择”手动指定续传点', null);
+                    } else {
+                        updateStatus('已在锚点附近找到续传点，开始下载...', null);
+                    }
                     if (anchorResult.found && resumePoint?.id) {
                         resumeSkipId = resumePoint.id;
                     }
@@ -1546,29 +1642,31 @@
         return false;
     }
 
-    async function searchResumeAroundAnchors(resumePoint, anchors, autoPause, anchorSearchCount) {
+    async function searchResumeAroundAnchors(resumePoint, anchors, autoPause, anchorSearchCount, preferredSide) {
         if (!resumePoint || !anchors) return { found: false, fallback: false };
 
         updateStatus('续传点未出现，正在定位锚点并二次搜索...', null);
-        const anchorLocated = await scrollToAnyAnchor(anchors, autoPause);
+        const anchorLocated = await scrollToAnyAnchor(anchors, autoPause, preferredSide);
         if (!anchorLocated) return { found: false, fallback: false };
 
         updateStatus('已定位锚点，正在上下搜索续传点...', null);
-        const found = await scanResumeAroundAnchor(resumePoint, autoPause, anchorSearchCount);
-        if (found) return { found: true, fallback: false };
-        return { found: false, fallback: true };
+        const found = await scanResumeAroundAnchor(resumePoint, autoPause, anchorSearchCount, anchorLocated.side);
+        const anchorInfo = anchorLocated.tweet ? extractTweetInfo(anchorLocated.tweet) : null;
+        if (found) return { found: true, fallback: false, anchorInfo };
+        return { found: false, fallback: true, anchorInfo };
     }
 
-    async function scrollToAnyAnchor(anchors, autoPause) {
+    async function scrollToAnyAnchor(anchors, autoPause, preferredSide) {
         const maxAttempts = 26;
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
             await waitForForegroundIfNeeded(autoPause);
             const tweets = document.querySelectorAll('[data-testid="tweet"]');
             for (const tweet of tweets) {
-                if (matchAnchorTweet(tweet, anchors)) {
+                const anchorMatch = matchAnchorTweet(tweet, anchors);
+                if (anchorMatch) {
                     tweet.scrollIntoView({ block: 'center' });
                     await sleep(400);
-                    return true;
+                    return { tweet, side: anchorMatch.side, anchor: anchorMatch.anchor };
                 }
             }
             await waitForForegroundIfNeeded(autoPause);
@@ -1578,7 +1676,7 @@
         return false;
     }
 
-    async function scanResumeAroundAnchor(resumePoint, autoPause, anchorSearchCount) {
+    async function scanResumeAroundAnchor(resumePoint, autoPause, anchorSearchCount, anchorSide) {
         const perDirection = Number.isFinite(anchorSearchCount) && anchorSearchCount > 0
             ? anchorSearchCount
             : ANCHOR_SEARCH_COUNT;
@@ -1630,13 +1728,19 @@
             return null;
         };
 
-        foundTweet = await scanDirection(-1);
+        const directionOrder = anchorSide === 'before'
+            ? [1, -1]
+            : anchorSide === 'after'
+                ? [-1, 1]
+                : [-1, 1];
+
+        foundTweet = await scanDirection(directionOrder[0]);
         if (foundTweet) {
             foundTweet.scrollIntoView({ block: 'center' });
             await sleep(400);
             return true;
         }
-        foundTweet = await scanDirection(1);
+        foundTweet = await scanDirection(directionOrder[1]);
         if (foundTweet) {
             foundTweet.scrollIntoView({ block: 'center' });
             await sleep(400);
@@ -1849,10 +1953,10 @@
         const after = Array.isArray(anchors.after) ? anchors.after : [];
 
         for (const anchor of before) {
-            if (isMatchTweet(tweet, anchor, '快照(前)')) return 'before';
+            if (isMatchTweet(tweet, anchor, '快照(前)')) return { side: 'before', anchor };
         }
         for (const anchor of after) {
-            if (isMatchTweet(tweet, anchor, '快照(后)')) return 'after';
+            if (isMatchTweet(tweet, anchor, '快照(后)')) return { side: 'after', anchor };
         }
         return null;
     }
