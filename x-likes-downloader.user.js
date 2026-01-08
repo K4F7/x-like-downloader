@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Likes 下载器
 // @namespace    https://github.com/K4F7/x-like-downloader
-// @version      2.1.3
+// @version      2.1.4
 // @description  下载 X (Twitter) 点赞列表中的图片、GIF和视频
 // @author       You
 // @icon         https://abs.twimg.com/favicons/twitter.3.ico
@@ -116,6 +116,31 @@
         .xld-checkbox-group {
             display: flex;
             gap: 16px;
+        }
+        .xld-mode-toggle {
+            display: flex;
+            margin-top: 8px;
+            background: #1f2d3a;
+            border: 1px solid #38444d;
+            border-radius: 999px;
+            padding: 4px;
+            gap: 4px;
+        }
+        .xld-mode-btn {
+            flex: 1;
+            border: none;
+            border-radius: 999px;
+            padding: 8px 10px;
+            font-size: 13px;
+            font-weight: 700;
+            color: #8b98a5;
+            background: transparent;
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s;
+        }
+        .xld-mode-btn.is-active {
+            background: #1d9bf0;
+            color: #fff;
         }
         .xld-checkbox-label {
             display: flex;
@@ -446,15 +471,9 @@
                 </div>
                 <div class="xld-section">
                     <div class="xld-label">下载模式</div>
-                    <div class="xld-checkbox-group">
-                        <label class="xld-checkbox-label">
-                            <input type="radio" name="xld-mode" value="marker" checked>
-                            标记点
-                        </label>
-                        <label class="xld-checkbox-label">
-                            <input type="radio" name="xld-mode" value="full">
-                            全量下载
-                        </label>
+                    <div class="xld-mode-toggle" id="xld-mode-toggle">
+                        <button type="button" class="xld-mode-btn" data-mode="marker" aria-pressed="true">标记点</button>
+                        <button type="button" class="xld-mode-btn" data-mode="full" aria-pressed="false">全量下载</button>
                     </div>
                     <div class="xld-input-row">
                         <span class="xld-input-label">单次上限</span>
@@ -542,19 +561,17 @@
         panel.querySelector('#xld-select-resume-btn').addEventListener('click', () => enterSelectMode('resume'));
         panel.querySelector('#xld-clear-resume-btn').addEventListener('click', clearResumePoint);
 
-        const modeRadios = panel.querySelectorAll('input[name="xld-mode"]');
-        modeRadios.forEach(radio => {
-            radio.addEventListener('change', () => {
-                GM_setValue('downloadMode', radio.value);
+        const modeButtons = panel.querySelectorAll('.xld-mode-btn');
+        modeButtons.forEach(button => {
+            button.addEventListener('click', () => {
+                const mode = button.dataset.mode || 'marker';
+                GM_setValue('downloadMode', mode);
                 updateModeDisplay();
             });
         });
 
         const savedMode = GM_getValue('downloadMode', 'marker');
-        const savedRadio = panel.querySelector(`input[name="xld-mode"][value="${savedMode}"]`);
-        if (savedRadio) {
-            savedRadio.checked = true;
-        }
+        updateModeToggle(savedMode);
 
         const limitInput = panel.querySelector('#xld-download-limit');
         if (limitInput) {
@@ -665,8 +682,8 @@
     }
 
     function getDownloadMode() {
-        const selected = document.querySelector('input[name="xld-mode"]:checked');
-        if (selected && selected.value) return selected.value;
+        const activeButton = document.querySelector('.xld-mode-btn.is-active');
+        if (activeButton && activeButton.dataset.mode) return activeButton.dataset.mode;
         return GM_getValue('downloadMode', 'marker');
     }
 
@@ -735,8 +752,19 @@
     }
 
     function updateModeDisplay() {
+        updateModeToggle(getDownloadMode());
         updateMarkerDisplay();
         updateResumeDisplay();
+    }
+
+    function updateModeToggle(mode) {
+        const buttons = document.querySelectorAll('.xld-mode-btn');
+        if (!buttons.length) return;
+        buttons.forEach(button => {
+            const active = button.dataset.mode === mode;
+            button.classList.toggle('is-active', active);
+            button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
     }
 
     function updateMarkerDisplay() {
