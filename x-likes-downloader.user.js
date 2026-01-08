@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Likes 下载器
 // @namespace    https://github.com/K4F7/x-like-downloader
-// @version      2.1.16
+// @version      2.1.17
 // @description  下载 X (Twitter) 点赞列表中的图片、GIF和视频
 // @author       You
 // @icon         https://abs.twimg.com/favicons/twitter.3.ico
@@ -1210,7 +1210,7 @@
 
         const mode = getDownloadMode();
         const types = getSelectedTypes();
-        const limit = getDownloadLimit();
+        const limit = mode === 'full' ? getDownloadLimit() : Infinity;
         const scanOptions = {
             mode,
             limit,
@@ -1263,7 +1263,7 @@
             let completionMsg = '';
             if (scanResult.stopReason === 'marker') {
                 completionMsg = `扫描完成！找到 ${collectedMedia.length} 个新文件（已到达标记点）`;
-            } else if (scanResult.stopReason === 'limit') {
+            } else if (scanResult.stopReason === 'limit' && mode === 'full') {
                 completionMsg = `扫描完成！已达到单次上限（${limit} 个媒体）`;
             } else if (scanResult.stopReason === 'resume-missing') {
                 completionMsg = '未找到续传点，请清除续传点后重试';
