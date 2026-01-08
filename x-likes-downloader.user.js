@@ -129,6 +129,35 @@
             height: 18px;
             accent-color: #1d9bf0;
         }
+        .xld-input-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-top: 10px;
+        }
+        .xld-input-label {
+            font-size: 12px;
+            color: #8b98a5;
+            min-width: 84px;
+        }
+        .xld-input-note {
+            margin-top: 6px;
+            font-size: 12px;
+            color: #8b98a5;
+        }
+        .xld-resume-info {
+            margin-top: 10px;
+            padding: 10px 12px;
+            background: #273340;
+            border: 1px solid #38444d;
+            border-radius: 8px;
+            font-size: 12px;
+            color: #e7e9ea;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
         .xld-btn {
             width: 100%;
             padding: 12px;
@@ -323,6 +352,9 @@
     // ========== 状态 ==========
     let isScanning = false;
     let collectedMedia = [];
+    let lastScanMode = 'marker';
+    let lastScanStopReason = null;
+    let pendingResumePoint = null;
 
     // ========== UI ==========
     function createPanel() {
@@ -351,6 +383,28 @@
                     </div>
                     <div class="xld-marker-hint">
                         扫描到标记点会自动停止，只下载新内容
+                    </div>
+                </div>
+                <div class="xld-section">
+                    <div class="xld-label">下载模式</div>
+                    <div class="xld-checkbox-group">
+                        <label class="xld-checkbox-label">
+                            <input type="radio" name="xld-mode" value="marker" checked>
+                            标记点
+                        </label>
+                        <label class="xld-checkbox-label">
+                            <input type="radio" name="xld-mode" value="full">
+                            全量下载
+                        </label>
+                    </div>
+                    <div class="xld-input-row">
+                        <span class="xld-input-label">单次上限</span>
+                        <input type="number" id="xld-download-limit" class="xld-date-input" min="1" step="1">
+                    </div>
+                    <div class="xld-input-note">建议 200 个媒体/次，可自行调整</div>
+                    <div class="xld-resume-info" id="xld-resume-info" style="display:none">
+                        <span id="xld-resume-text">续传点：未设置</span>
+                        <button class="xld-btn-small" id="xld-clear-resume-btn">清除</button>
                     </div>
                 </div>
                 <div class="xld-section" id="xld-init-section" style="display:none">
@@ -403,9 +457,36 @@
         panel.querySelector('#xld-init-btn').addEventListener('click', initMarker);
         panel.querySelector('#xld-init-select-btn').addEventListener('click', () => enterSelectMode());
         panel.querySelector('#xld-select-marker-btn').addEventListener('click', () => enterSelectMode());
+        panel.querySelector('#xld-clear-resume-btn').addEventListener('click', clearResumePoint);
 
-        // 初始化标记状态显示
-        updateMarkerDisplay();
+        const modeRadios = panel.querySelectorAll('input[name="xld-mode"]');
+        modeRadios.forEach(radio => {
+            radio.addEventListener('change', () => {
+                GM_setValue('downloadMode', radio.value);
+                updateModeDisplay();
+            });
+        });
+
+        const savedMode = GM_getValue('downloadMode', 'marker');
+        const savedRadio = panel.querySelector(`input[name="xld-mode"][value="${savedMode}"]`);
+        if (savedRadio) {
+            savedRadio.checked = true;
+        }
+
+        const limitInput = panel.querySelector('#xld-download-limit');
+        if (limitInput) {
+            const savedLimit = GM_getValue('downloadLimit', 200);
+            limitInput.value = Number.isFinite(savedLimit) && savedLimit > 0 ? savedLimit : 200;
+            limitInput.addEventListener('change', () => {
+                const value = parseInt(limitInput.value, 10);
+                const normalized = Number.isFinite(value) && value > 0 ? value : 200;
+                limitInput.value = normalized;
+                GM_setValue('downloadLimit', normalized);
+            });
+        }
+
+        // 初始化显示
+        updateModeDisplay();
 
         return { overlay, panel };
     }
@@ -427,12 +508,54 @@
         }
     }
 
+    function getDownloadMode() {
+        const selected = document.querySelector('input[name="xld-mode"]:checked');
+        if (selected && selected.value) return selected.value;
+        return GM_getValue('downloadMode', 'marker');
+    }
+
+    function getDownloadLimit() {
+        const input = document.getElementById('xld-download-limit');
+        const value = input ? parseInt(input.value, 10) : GM_getValue('downloadLimit', 200);
+        if (Number.isFinite(value) && value > 0) return value;
+        return 200;
+    }
+
+    function updateResumeDisplay() {
+        const resumeInfo = document.getElementById('xld-resume-info');
+        const resumeText = document.getElementById('xld-resume-text');
+        if (!resumeInfo || !resumeText) return;
+
+        const mode = getDownloadMode();
+        if (mode !== 'full') {
+            resumeInfo.style.display = 'none';
+            return;
+        }
+
+        const savedResume = GM_getValue('fullResumePoint', null);
+        if (savedResume && savedResume.id) {
+            const shortId = savedResume.id.substring(0, 8) + '...';
+            const displayText = savedResume.text || '(无文字内容)';
+            resumeText.textContent = `续传点：${displayText} (ID: ${shortId})`;
+        } else {
+            resumeText.textContent = '续传点：未设置';
+        }
+        resumeInfo.style.display = 'flex';
+    }
+
+    function updateModeDisplay() {
+        updateMarkerDisplay();
+        updateResumeDisplay();
+    }
+
     function updateMarkerDisplay() {
         const markerInfo = document.getElementById('xld-marker-info');
         const markerActions = document.getElementById('xld-marker-actions');
         const initSection = document.getElementById('xld-init-section');
         const scanBtn = document.getElementById('xld-scan-btn');
         const savedMarker = GM_getValue('markerTweetId', null);
+        const mode = getDownloadMode();
+        const isMarkerMode = mode === 'marker';
 
         if (savedMarker && savedMarker.id) {
             // 显示缩略图和标题
@@ -458,8 +581,8 @@
         } else {
             markerInfo.innerHTML = `<span class="xld-marker-empty">未设置标记点</span>`;
             if (markerActions) markerActions.style.display = 'none';
-            if (initSection) initSection.style.display = 'block';
-            if (scanBtn) scanBtn.style.display = 'none';
+            if (initSection) initSection.style.display = isMarkerMode ? 'block' : 'none';
+            if (scanBtn) scanBtn.style.display = isMarkerMode ? 'none' : 'block';
         }
     }
 
@@ -468,6 +591,14 @@
             GM_setValue('markerTweetId', null);
             updateMarkerDisplay();
             updateStatus('标记点已清除');
+        }
+    }
+
+    function clearResumePoint() {
+        if (confirm('确定要清除续传点吗？')) {
+            GM_setValue('fullResumePoint', null);
+            updateResumeDisplay();
+            updateStatus('续传点已清除');
         }
     }
 
@@ -735,7 +866,30 @@
             }
         }
 
+        const mode = getDownloadMode();
+        const types = getSelectedTypes();
+        const limit = getDownloadLimit();
+        const scanOptions = { mode, limit };
+        let statusText = '开始扫描...';
+
+        if (mode === 'marker') {
+            const savedMarker = GM_getValue('markerTweetId', null);
+            if (!savedMarker || !savedMarker.id) {
+                updateStatus('请先设置标记点');
+                return;
+            }
+            scanOptions.savedMarker = savedMarker;
+            statusText = '开始扫描（到标记点停止）...';
+        } else {
+            const resumePoint = GM_getValue('fullResumePoint', null);
+            scanOptions.resumePoint = resumePoint;
+            statusText = resumePoint ? '开始扫描（从上次进度继续）...' : '开始扫描（全量下载）...';
+        }
+
         isScanning = true;
+        lastScanMode = mode;
+        lastScanStopReason = null;
+        pendingResumePoint = null;
         collectedMedia = [];
         firstTweetInfo = null;
 
@@ -746,16 +900,23 @@
         scanBtn.textContent = '扫描中...';
         downloadBtn.style.display = 'none';
 
-        const types = getSelectedTypes();
-        const savedMarker = GM_getValue('markerTweetId', null);
-
-        updateStatus(savedMarker ? '开始扫描（到标记点停止）...' : '开始扫描...', 0);
+        updateStatus(statusText, 0);
 
         try {
-            const reachedMarker = await scanLikes(types, savedMarker);
+            const scanResult = await scanLikes(types, scanOptions);
+            lastScanStopReason = scanResult.stopReason;
+            pendingResumePoint = scanResult.resumePoint || null;
 
-            if (reachedMarker) {
+            if (scanResult.stopReason === 'marker') {
                 updateStatus(`扫描完成！找到 ${collectedMedia.length} 个新文件（已到达标记点）`, 100);
+            } else if (scanResult.stopReason === 'limit') {
+                updateStatus(`扫描完成！已达到单次上限（${limit} 个媒体）`, 100);
+            } else if (scanResult.stopReason === 'resume-missing') {
+                updateStatus('未找到续传点，请清除续传点后重试', 100);
+                if (mode === 'full') {
+                    GM_setValue('fullResumePoint', null);
+                    updateResumeDisplay();
+                }
             } else {
                 updateStatus(`扫描完成！找到 ${collectedMedia.length} 个文件`, 100);
             }
@@ -764,7 +925,10 @@
                 downloadBtn.style.display = 'block';
                 downloadBtn.textContent = `下载全部 (${collectedMedia.length} 个文件)`;
             } else {
-                updateStatus('没有找到新的媒体文件', 100);
+                const emptyMsg = mode === 'full'
+                    ? '没有找到可下载的媒体文件'
+                    : '没有找到新的媒体文件';
+                updateStatus(emptyMsg, 100);
             }
         } catch (error) {
             updateStatus(`扫描出错: ${error.message}`, 0);
@@ -790,18 +954,29 @@
         return null;
     }
 
-    async function scanLikes(types, savedMarker) {
+    async function scanLikes(types, options) {
         const seenUrls = new Set();
         const seenTweetIds = new Set();
         let noNewContentCount = 0;
         let reachedMarker = false;
+        let reachedLimit = false;
         let totalScanned = 0;
         let lastSeenCount = 0;
+        const mode = options?.mode || 'marker';
+        const savedMarker = options?.savedMarker || null;
+        const resumePoint = options?.resumePoint || null;
+        const limit = Number.isFinite(options?.limit) && options.limit > 0 ? options.limit : Infinity;
+        let resumeFound = !resumePoint;
+        let limitResumePoint = null;
 
         console.log('[XLD] ========== 开始扫描 ==========');
-        console.log('[XLD] 标记点信息:', JSON.stringify(savedMarker, null, 2));
+        if (mode === 'marker') {
+            console.log('[XLD] 标记点信息:', JSON.stringify(savedMarker, null, 2));
+        } else {
+            console.log('[XLD] 全量下载模式，续传点:', JSON.stringify(resumePoint, null, 2));
+        }
 
-        while (noNewContentCount < 8 && !reachedMarker) {
+        while (noNewContentCount < 8 && !reachedMarker && !reachedLimit) {
             // 获取当前可见的推文
             const tweets = document.querySelectorAll('[data-testid="tweet"]');
 
@@ -812,7 +987,7 @@
                 if (!tweetId) continue;
 
                 // 【关键】无论是否处理过，都要检查是否是标记点
-                if (savedMarker) {
+                if (mode === 'marker' && savedMarker) {
                     const isMarker = isMarkerTweet(tweet, savedMarker);
                     if (isMarker) {
                         console.log('[XLD] ✓✓✓ 找到标记点！停止扫描 ✓✓✓');
@@ -825,6 +1000,14 @@
                 if (seenTweetIds.has(tweetId)) continue;
                 seenTweetIds.add(tweetId);
                 totalScanned++;
+
+                if (mode === 'full' && !resumeFound) {
+                    if (isResumeTweet(tweet, resumePoint)) {
+                        resumeFound = true;
+                        continue;
+                    }
+                    continue;
+                }
 
                 // 每处理10条推文输出一次日志
                 if (totalScanned % 10 === 0) {
@@ -846,10 +1029,18 @@
                     }
                 }
 
+                if (collectedMedia.length >= limit) {
+                    reachedLimit = true;
+                    if (mode === 'full') {
+                        limitResumePoint = extractTweetInfo(tweet);
+                    }
+                    break;
+                }
+
                 updateStatus(`已扫描 ${totalScanned} 条推文，找到 ${collectedMedia.length} 个文件...`, null);
             }
 
-            if (reachedMarker) break;
+            if (reachedMarker || reachedLimit) break;
 
             // 【关键改进】逐步滚动，而不是直接到底部
             const scrollStep = window.innerHeight * 0.8; // 每次滚动80%屏幕高度
@@ -868,8 +1059,14 @@
         }
 
         console.log('[XLD] ========== 扫描结束 ==========');
-        console.log(`[XLD] 共扫描 ${totalScanned} 条，找到 ${collectedMedia.length} 个媒体，到达标记点: ${reachedMarker}`);
-        return reachedMarker;
+        console.log(`[XLD] 共扫描 ${totalScanned} 条，找到 ${collectedMedia.length} 个媒体，到达标记点: ${reachedMarker}, 达到上限: ${reachedLimit}`);
+
+        if (mode === 'full' && resumePoint && !resumeFound) {
+            return { stopReason: 'resume-missing', resumePoint: null };
+        }
+        if (reachedMarker) return { stopReason: 'marker', resumePoint: null };
+        if (reachedLimit) return { stopReason: 'limit', resumePoint: limitResumePoint };
+        return { stopReason: 'end', resumePoint: null };
     }
 
     function extractMediaFromTweet(tweet, types) {
@@ -1041,32 +1238,31 @@
         return { id, fullText, mediaId, authorUsername };
     }
 
-    // 检查是否是标记点推文（多重验证）
-    function isMarkerTweet(tweet, savedMarker) {
-        if (!savedMarker) return false;
+    function isMatchTweet(tweet, savedPoint, label) {
+        if (!savedPoint) return false;
 
         const currentInfo = extractFullTweetInfo(tweet);
         let matchScore = 0;
         let matchReasons = [];
 
         // 1. ID精确匹配（权重最高）
-        if (currentInfo.id && savedMarker.id && currentInfo.id === savedMarker.id) {
+        if (currentInfo.id && savedPoint.id && currentInfo.id === savedPoint.id) {
             matchScore += 3;
             matchReasons.push('ID匹配');
         }
 
         // 2. 媒体ID匹配（非常可靠，媒体ID是唯一的）
-        if (currentInfo.mediaId && savedMarker.mediaId && currentInfo.mediaId === savedMarker.mediaId) {
+        if (currentInfo.mediaId && savedPoint.mediaId && currentInfo.mediaId === savedPoint.mediaId) {
             matchScore += 2;
             matchReasons.push('媒体ID匹配');
         }
 
         // 3. 文本匹配（检查是否包含，因为保存时可能被截断）
-        if (currentInfo.fullText && savedMarker.fullText) {
+        if (currentInfo.fullText && savedPoint.fullText) {
             // 如果保存的文本是完整文本的前缀，或者完全相同
-            if (currentInfo.fullText === savedMarker.fullText ||
-                currentInfo.fullText.startsWith(savedMarker.fullText) ||
-                savedMarker.fullText.startsWith(currentInfo.fullText)) {
+            if (currentInfo.fullText === savedPoint.fullText ||
+                currentInfo.fullText.startsWith(savedPoint.fullText) ||
+                savedPoint.fullText.startsWith(currentInfo.fullText)) {
                 matchScore += 1;
                 matchReasons.push('文本匹配');
             }
@@ -1079,13 +1275,23 @@
         const isMatch = matchScore >= 2;
 
         // 调试：显示每个推文的匹配情况（只显示有部分匹配的）
-        if (matchScore > 0 || currentInfo.id === savedMarker.id) {
-            console.log(`[XLD] 匹配检查: ID=${currentInfo.id}, 分数=${matchScore}, 原因=[${matchReasons.join(',')}]`);
+        if (matchScore > 0 || currentInfo.id === savedPoint.id) {
+            console.log(`[XLD] ${label}匹配检查: ID=${currentInfo.id}, 分数=${matchScore}, 原因=[${matchReasons.join(',')}]`);
             console.log(`[XLD]   当前: mediaId=${currentInfo.mediaId}, text=${currentInfo.fullText?.substring(0,30)}`);
-            console.log(`[XLD]   标记: mediaId=${savedMarker.mediaId}, text=${savedMarker.fullText?.substring(0,30)}`);
+            console.log(`[XLD]   ${label}: mediaId=${savedPoint.mediaId}, text=${savedPoint.fullText?.substring(0,30)}`);
         }
 
         return isMatch;
+    }
+
+    // 检查是否是标记点推文（多重验证）
+    function isMarkerTweet(tweet, savedMarker) {
+        return isMatchTweet(tweet, savedMarker, '标记点');
+    }
+
+    // 检查是否是续传点推文（多重验证）
+    function isResumeTweet(tweet, resumePoint) {
+        return isMatchTweet(tweet, resumePoint, '续传点');
     }
 
     // ========== 下载逻辑 ==========
@@ -1169,10 +1375,20 @@
             // 延迟释放 URL
             setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
 
-            // 更新标记点
-            if (firstTweetInfo && firstTweetInfo.id) {
+            // 更新标记点（仅标记点模式且确实到达标记点）
+            if (lastScanMode === 'marker' && lastScanStopReason === 'marker' && firstTweetInfo && firstTweetInfo.id) {
                 GM_setValue('markerTweetId', firstTweetInfo);
                 updateMarkerDisplay();
+            }
+
+            // 更新续传点（全量下载模式）
+            if (lastScanMode === 'full') {
+                if (lastScanStopReason === 'limit' && pendingResumePoint && pendingResumePoint.id) {
+                    GM_setValue('fullResumePoint', pendingResumePoint);
+                } else if (lastScanStopReason === 'end') {
+                    GM_setValue('fullResumePoint', null);
+                }
+                updateResumeDisplay();
             }
 
             const failMsg = failed > 0 ? ` (${failed} 个失败)` : '';
