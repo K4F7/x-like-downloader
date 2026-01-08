@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Likes 下载器
 // @namespace    https://github.com/K4F7/x-like-downloader
-// @version      1.1.0
+// @version      1.2.0
 // @description  下载 X (Twitter) 点赞列表中的图片、GIF和视频
 // @author       You
 // @match        https://x.com/*
@@ -645,6 +645,18 @@
     function extractTweetInfo(tweet) {
         const id = extractTweetId(tweet);
 
+        // 提取推文作者名
+        let authorName = '';
+        // 方法1: 从用户头像旁边的链接获取
+        const userNameEl = tweet.querySelector('[data-testid="User-Name"]');
+        if (userNameEl) {
+            // 第一个 span 通常是显示名称
+            const nameSpan = userNameEl.querySelector('a span');
+            if (nameSpan) {
+                authorName = nameSpan.textContent.trim();
+            }
+        }
+
         // 提取推文文本（完整版用于匹配）
         let fullText = '';
         let text = '';
@@ -656,6 +668,12 @@
             if (text.length > 50) {
                 text = text.substring(0, 50) + '...';
             }
+        }
+
+        // 如果没有文字内容，用作者名填充
+        if (!text && authorName) {
+            text = `@${authorName} 的推文`;
+            fullText = text;
         }
 
         // 提取缩略图URL（用于显示）
@@ -673,7 +691,7 @@
             }
         }
 
-        return { id, text, fullText, thumbnail, mediaId };
+        return { id, text, fullText, thumbnail, mediaId, authorName };
     }
 
     function updateStatus(text, progress = null) {
