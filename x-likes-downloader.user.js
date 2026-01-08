@@ -532,7 +532,7 @@
 
         const autoPauseCheckbox = panel.querySelector('#xld-auto-pause');
         if (autoPauseCheckbox) {
-            autoPauseCheckbox.checked = GM_getValue('autoPause', false);
+            autoPauseCheckbox.checked = GM_getValue('autoPause', true);
             autoPauseCheckbox.addEventListener('change', () => {
                 GM_setValue('autoPause', autoPauseCheckbox.checked);
             });
@@ -620,7 +620,7 @@
     function getAutoPause() {
         const input = document.getElementById('xld-auto-pause');
         if (input) return input.checked;
-        return GM_getValue('autoPause', false);
+        return GM_getValue('autoPause', true);
     }
 
     function updateResumeDisplay() {
