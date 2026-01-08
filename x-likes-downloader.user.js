@@ -193,6 +193,11 @@
             display: flex;
             gap: 10px;
         }
+        .xld-date-hint {
+            margin-top: 6px;
+            font-size: 12px;
+            color: #8b98a5;
+        }
         .xld-marker-info {
             padding: 12px;
             background: #273340;
@@ -323,6 +328,7 @@
     // ========== 状态 ==========
     let isScanning = false;
     let collectedMedia = [];
+    let lastScanMode = 'marker';
 
     // ========== UI ==========
     function createPanel() {
@@ -352,6 +358,24 @@
                     <div class="xld-marker-hint">
                         扫描到标记点会自动停止，只下载新内容
                     </div>
+                </div>
+                <div class="xld-section">
+                    <div class="xld-label">下载模式</div>
+                    <div class="xld-checkbox-group">
+                        <label class="xld-checkbox-label">
+                            <input type="radio" name="xld-mode" value="marker" checked>
+                            标记点
+                        </label>
+                        <label class="xld-checkbox-label">
+                            <input type="radio" name="xld-mode" value="range">
+                            时间区间
+                        </label>
+                    </div>
+                    <div class="xld-date-custom" id="xld-date-range">
+                        <input type="date" id="xld-date-start" class="xld-date-input" aria-label="开始日期">
+                        <input type="date" id="xld-date-end" class="xld-date-input" aria-label="结束日期">
+                    </div>
+                    <div class="xld-date-hint">仅在时间区间模式下生效</div>
                 </div>
                 <div class="xld-section" id="xld-init-section" style="display:none">
                     <div class="xld-init-notice">
@@ -404,8 +428,16 @@
         panel.querySelector('#xld-init-select-btn').addEventListener('click', () => enterSelectMode());
         panel.querySelector('#xld-select-marker-btn').addEventListener('click', () => enterSelectMode());
 
-        // 初始化标记状态显示
-        updateMarkerDisplay();
+        // 下载模式切换
+        const modeRadios = panel.querySelectorAll('input[name="xld-mode"]');
+        modeRadios.forEach(radio => {
+            radio.addEventListener('change', () => {
+                updateModeDisplay();
+            });
+        });
+
+        // 初始化显示
+        updateModeDisplay();
 
         return { overlay, panel };
     }
@@ -427,12 +459,35 @@
         }
     }
 
+    function getDownloadMode() {
+        const selected = document.querySelector('input[name="xld-mode"]:checked');
+        return selected ? selected.value : 'marker';
+    }
+
+    function updateModeDisplay() {
+        const mode = getDownloadMode();
+        const dateRange = document.getElementById('xld-date-range');
+        const dateHint = document.querySelector('.xld-date-hint');
+        const isRangeMode = mode === 'range';
+
+        if (dateRange) {
+            dateRange.classList.toggle('active', isRangeMode);
+        }
+        if (dateHint) {
+            dateHint.style.display = isRangeMode ? 'block' : 'none';
+        }
+
+        updateMarkerDisplay();
+    }
+
     function updateMarkerDisplay() {
         const markerInfo = document.getElementById('xld-marker-info');
         const markerActions = document.getElementById('xld-marker-actions');
         const initSection = document.getElementById('xld-init-section');
         const scanBtn = document.getElementById('xld-scan-btn');
         const savedMarker = GM_getValue('markerTweetId', null);
+        const mode = getDownloadMode();
+        const isMarkerMode = mode === 'marker';
 
         if (savedMarker && savedMarker.id) {
             // 显示缩略图和标题
@@ -458,8 +513,8 @@
         } else {
             markerInfo.innerHTML = `<span class="xld-marker-empty">未设置标记点</span>`;
             if (markerActions) markerActions.style.display = 'none';
-            if (initSection) initSection.style.display = 'block';
-            if (scanBtn) scanBtn.style.display = 'none';
+            if (initSection) initSection.style.display = isMarkerMode ? 'block' : 'none';
+            if (scanBtn) scanBtn.style.display = isMarkerMode ? 'none' : 'block';
         }
     }
 
@@ -715,6 +770,28 @@
         };
     }
 
+    function getSelectedDateRange() {
+        const startStr = document.getElementById('xld-date-start')?.value || '';
+        const endStr = document.getElementById('xld-date-end')?.value || '';
+
+        if (!startStr || !endStr) {
+            return { error: '请设置开始日期和结束日期' };
+        }
+
+        const start = new Date(`${startStr}T00:00:00`);
+        const end = new Date(`${endStr}T23:59:59`);
+
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+            return { error: '日期格式错误' };
+        }
+
+        if (start > end) {
+            return { error: '开始日期不能晚于结束日期' };
+        }
+
+        return { start, end, startStr, endStr };
+    }
+
     // ========== 扫描逻辑 ==========
     let firstTweetInfo = null; // 记录本次扫描的第一条推文信息，用于设置新标记
 
@@ -735,7 +812,33 @@
             }
         }
 
+        const mode = getDownloadMode();
+        const types = getSelectedTypes();
+        const scanOptions = { mode };
+        let statusText = '开始扫描...';
+
+        if (mode === 'marker') {
+            const savedMarker = GM_getValue('markerTweetId', null);
+            if (!savedMarker || !savedMarker.id) {
+                updateStatus('请先设置标记点');
+                return;
+            }
+            scanOptions.savedMarker = savedMarker;
+            statusText = '开始扫描（到标记点停止）...';
+        } else {
+            const dateRange = getSelectedDateRange();
+            if (dateRange.error) {
+                updateStatus(dateRange.error);
+                return;
+            }
+            scanOptions.rangeStart = dateRange.start;
+            scanOptions.rangeEnd = dateRange.end;
+            scanOptions.rangeLabel = `${dateRange.startStr} ~ ${dateRange.endStr}`;
+            statusText = `开始扫描（${scanOptions.rangeLabel}）...`;
+        }
+
         isScanning = true;
+        lastScanMode = mode;
         collectedMedia = [];
         firstTweetInfo = null;
 
@@ -746,16 +849,15 @@
         scanBtn.textContent = '扫描中...';
         downloadBtn.style.display = 'none';
 
-        const types = getSelectedTypes();
-        const savedMarker = GM_getValue('markerTweetId', null);
-
-        updateStatus(savedMarker ? '开始扫描（到标记点停止）...' : '开始扫描...', 0);
+        updateStatus(statusText, 0);
 
         try {
-            const reachedMarker = await scanLikes(types, savedMarker);
+            const stopReason = await scanLikes(types, scanOptions);
 
-            if (reachedMarker) {
+            if (stopReason === 'marker') {
                 updateStatus(`扫描完成！找到 ${collectedMedia.length} 个新文件（已到达标记点）`, 100);
+            } else if (stopReason === 'range') {
+                updateStatus(`扫描完成！找到 ${collectedMedia.length} 个文件（已到达开始日期）`, 100);
             } else {
                 updateStatus(`扫描完成！找到 ${collectedMedia.length} 个文件`, 100);
             }
@@ -764,7 +866,10 @@
                 downloadBtn.style.display = 'block';
                 downloadBtn.textContent = `下载全部 (${collectedMedia.length} 个文件)`;
             } else {
-                updateStatus('没有找到新的媒体文件', 100);
+                const emptyMsg = lastScanMode === 'range'
+                    ? '没有找到符合时间区间的媒体文件'
+                    : '没有找到新的媒体文件';
+                updateStatus(emptyMsg, 100);
             }
         } catch (error) {
             updateStatus(`扫描出错: ${error.message}`, 0);
@@ -790,18 +895,27 @@
         return null;
     }
 
-    async function scanLikes(types, savedMarker) {
+    async function scanLikes(types, options) {
         const seenUrls = new Set();
         const seenTweetIds = new Set();
         let noNewContentCount = 0;
         let reachedMarker = false;
+        let reachedRangeEnd = false;
         let totalScanned = 0;
         let lastSeenCount = 0;
+        const mode = options?.mode || 'marker';
+        const savedMarker = options?.savedMarker || null;
+        const rangeStart = options?.rangeStart || null;
+        const rangeEnd = options?.rangeEnd || null;
 
         console.log('[XLD] ========== 开始扫描 ==========');
-        console.log('[XLD] 标记点信息:', JSON.stringify(savedMarker, null, 2));
+        if (mode === 'marker') {
+            console.log('[XLD] 标记点信息:', JSON.stringify(savedMarker, null, 2));
+        } else {
+            console.log('[XLD] 时间区间:', options?.rangeLabel || '');
+        }
 
-        while (noNewContentCount < 8 && !reachedMarker) {
+        while (noNewContentCount < 8 && !reachedMarker && !reachedRangeEnd) {
             // 获取当前可见的推文
             const tweets = document.querySelectorAll('[data-testid="tweet"]');
 
@@ -812,12 +926,26 @@
                 if (!tweetId) continue;
 
                 // 【关键】无论是否处理过，都要检查是否是标记点
-                if (savedMarker) {
+                if (mode === 'marker' && savedMarker) {
                     const isMarker = isMarkerTweet(tweet, savedMarker);
                     if (isMarker) {
                         console.log('[XLD] ✓✓✓ 找到标记点！停止扫描 ✓✓✓');
                         reachedMarker = true;
                         break;
+                    }
+                }
+
+                let shouldCollect = true;
+                if (mode === 'range') {
+                    const tweetDate = extractTweetDate(tweet);
+                    if (tweetDate) {
+                        if (rangeStart && tweetDate < rangeStart) {
+                            reachedRangeEnd = true;
+                            break;
+                        }
+                        if (rangeEnd && tweetDate > rangeEnd) {
+                            shouldCollect = false;
+                        }
                     }
                 }
 
@@ -837,19 +965,21 @@
                     console.log('[XLD] 第一条推文:', firstTweetInfo.id, firstTweetInfo.text);
                 }
 
-                // 提取媒体（DOM优先，API兜底）
-                const mediaItems = await extractMediaWithApiFallback(tweet, types);
-                for (const item of mediaItems) {
-                    if (!seenUrls.has(item.url)) {
-                        seenUrls.add(item.url);
-                        collectedMedia.push(item);
+                if (shouldCollect) {
+                    // 提取媒体（DOM优先，API兜底）
+                    const mediaItems = await extractMediaWithApiFallback(tweet, types);
+                    for (const item of mediaItems) {
+                        if (!seenUrls.has(item.url)) {
+                            seenUrls.add(item.url);
+                            collectedMedia.push(item);
+                        }
                     }
                 }
 
                 updateStatus(`已扫描 ${totalScanned} 条推文，找到 ${collectedMedia.length} 个文件...`, null);
             }
 
-            if (reachedMarker) break;
+            if (reachedMarker || reachedRangeEnd) break;
 
             // 【关键改进】逐步滚动，而不是直接到底部
             const scrollStep = window.innerHeight * 0.8; // 每次滚动80%屏幕高度
@@ -868,8 +998,10 @@
         }
 
         console.log('[XLD] ========== 扫描结束 ==========');
-        console.log(`[XLD] 共扫描 ${totalScanned} 条，找到 ${collectedMedia.length} 个媒体，到达标记点: ${reachedMarker}`);
-        return reachedMarker;
+        console.log(`[XLD] 共扫描 ${totalScanned} 条，找到 ${collectedMedia.length} 个媒体，到达标记点: ${reachedMarker}, 到达开始日期: ${reachedRangeEnd}`);
+        if (reachedMarker) return 'marker';
+        if (reachedRangeEnd) return 'range';
+        return null;
     }
 
     function extractMediaFromTweet(tweet, types) {
@@ -974,6 +1106,15 @@
             console.warn('[XLD] API媒体提取失败:', tweetId, error);
             return domMedia;
         }
+    }
+
+    function extractTweetDate(tweet) {
+        const timeEl = tweet.querySelector('time');
+        const datetime = timeEl?.getAttribute('datetime');
+        if (!datetime) return null;
+        const date = new Date(datetime);
+        if (Number.isNaN(date.getTime())) return null;
+        return date;
     }
 
     function extractTweetId(tweet) {
@@ -1169,8 +1310,8 @@
             // 延迟释放 URL
             setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
 
-            // 更新标记点
-            if (firstTweetInfo && firstTweetInfo.id) {
+            // 仅标记点模式才更新标记点
+            if (lastScanMode === 'marker' && firstTweetInfo && firstTweetInfo.id) {
                 GM_setValue('markerTweetId', firstTweetInfo);
                 updateMarkerDisplay();
             }
