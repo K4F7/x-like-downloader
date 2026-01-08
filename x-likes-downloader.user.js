@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Likes 下载器
 // @namespace    https://github.com/K4F7/x-like-downloader
-// @version      2.1.6
+// @version      2.1.9
 // @description  下载 X (Twitter) 点赞列表中的图片、GIF和视频
 // @author       You
 // @icon         https://abs.twimg.com/favicons/twitter.3.ico
@@ -170,31 +170,6 @@
             margin-top: 6px;
             font-size: 12px;
             color: #8b98a5;
-        }
-        .xld-resume-info {
-            margin-top: 10px;
-            padding: 10px 12px;
-            background: #273340;
-            border: 1px solid #38444d;
-            border-radius: 8px;
-            font-size: 12px;
-            color: #e7e9ea;
-            display: flex;
-            align-items: center;
-            justify-content: flex-start;
-            gap: 8px;
-        }
-        .xld-resume-text {
-            flex: 1;
-        }
-        .xld-resume-thumb {
-            width: 28px;
-            height: 28px;
-            border-radius: 6px;
-            object-fit: cover;
-            border: 1px solid #38444d;
-            display: none;
-            flex-shrink: 0;
         }
         .xld-btn {
             width: 100%;
@@ -480,6 +455,18 @@
                 <button class="xld-close">✕</button>
             </div>
             <div class="xld-body">
+                <div class="xld-section xld-full-only" id="xld-resume-section">
+                    <div class="xld-marker-header">
+                        <div class="xld-label" style="margin-bottom:0">续传点</div>
+                        <div class="xld-marker-actions" id="xld-resume-actions">
+                            <button class="xld-btn-small" id="xld-select-resume-btn">选择</button>
+                            <button class="xld-btn-small" id="xld-clear-resume-btn">清除</button>
+                        </div>
+                    </div>
+                    <div class="xld-marker-info" id="xld-resume-info">
+                        <span class="xld-marker-empty">未设置续传点</span>
+                    </div>
+                </div>
                 <div class="xld-section">
                     <div class="xld-marker-header">
                         <div class="xld-label" style="margin-bottom:0">标记点</div>
@@ -501,37 +488,33 @@
                         <button type="button" class="xld-mode-btn" data-mode="marker" aria-pressed="true">标记点</button>
                         <button type="button" class="xld-mode-btn" data-mode="full" aria-pressed="false">全量下载</button>
                     </div>
-                    <div class="xld-input-row">
+                    <div class="xld-input-row xld-full-only">
                         <span class="xld-input-label">单次上限</span>
                         <input type="number" id="xld-download-limit" class="xld-date-input" min="1" step="1">
                     </div>
-                    <div class="xld-input-note">建议 200 个媒体/次，可自行调整</div>
-                    <div class="xld-input-row">
+                    <div class="xld-input-note xld-full-only">建议 200 个媒体/次，可自行调整</div>
+                    <div class="xld-input-row xld-full-only">
                         <label class="xld-checkbox-label">
                             <input type="checkbox" id="xld-preload-window">
                             预加载窗口
                         </label>
                     </div>
-                    <div class="xld-input-row">
+                    <div class="xld-input-row xld-full-only">
                         <span class="xld-input-label">预加载缓冲</span>
                         <input type="number" id="xld-preload-buffer" class="xld-date-input" min="0" step="1">
                     </div>
-                    <div class="xld-input-note">仅全量下载生效，建议 50。</div>
-                    <div class="xld-input-row">
+                    <div class="xld-input-note xld-full-only">仅全量下载生效，建议 50。</div>
+                    <div class="xld-input-row xld-full-only">
                         <label class="xld-checkbox-label">
                             <input type="checkbox" id="xld-safe-mode">
                             安全模式（慢速定位）
                         </label>
+                    </div>
+                    <div class="xld-input-row">
                         <label class="xld-checkbox-label">
                             <input type="checkbox" id="xld-auto-pause">
                             后台自动暂停
                         </label>
-                    </div>
-                    <div class="xld-resume-info" id="xld-resume-info" style="display:none">
-                        <img class="xld-resume-thumb" id="xld-resume-thumb" alt="续传缩略图">
-                        <span class="xld-resume-text" id="xld-resume-text">续传点：未设置</span>
-                        <button class="xld-btn-small" id="xld-select-resume-btn">选择</button>
-                        <button class="xld-btn-small" id="xld-clear-resume-btn">清除</button>
                     </div>
                 </div>
                 <div class="xld-section" id="xld-init-section" style="display:none">
@@ -779,14 +762,11 @@
 
     function updateResumeDisplay() {
         const resumeInfo = document.getElementById('xld-resume-info');
-        const resumeText = document.getElementById('xld-resume-text');
-        const resumeThumb = document.getElementById('xld-resume-thumb');
-        if (!resumeInfo || !resumeText) return;
+        const clearBtn = document.getElementById('xld-clear-resume-btn');
+        if (!resumeInfo) return;
 
         const mode = getDownloadMode();
         if (mode !== 'full') {
-            resumeInfo.style.display = 'none';
-            if (resumeThumb) resumeThumb.style.display = 'none';
             return;
         }
 
@@ -795,23 +775,28 @@
         if (savedResume && savedResume.id) {
             const shortId = savedResume.id.substring(0, 8) + '...';
             const displayText = savedResume.text || '(无文字内容)';
-            resumeText.textContent = `续传点：${displayText} (ID: ${shortId})`;
-            if (resumeThumb && savedResume.thumbnail) {
-                resumeThumb.src = savedResume.thumbnail;
-                resumeThumb.style.display = 'inline-block';
-            } else if (resumeThumb) {
-                resumeThumb.style.display = 'none';
+            let thumbHtml = '';
+            if (savedResume.thumbnail) {
+                thumbHtml = `<img class="xld-marker-thumb" src="${savedResume.thumbnail}" alt="缩略图">`;
             }
+            resumeInfo.innerHTML = `
+                ${thumbHtml}
+                <div class="xld-marker-text">
+                    <div class="xld-marker-title" title="${savedResume.text || ''}">${displayText}</div>
+                    <div class="xld-marker-id">ID: ${shortId}</div>
+                </div>
+            `;
+            if (clearBtn) clearBtn.disabled = false;
         } else {
-            resumeText.textContent = '续传点：未设置';
-            if (resumeThumb) resumeThumb.style.display = 'none';
+            resumeInfo.innerHTML = `<span class="xld-marker-empty">未设置续传点</span>`;
+            if (clearBtn) clearBtn.disabled = true;
         }
-        resumeInfo.style.display = 'flex';
     }
 
     function updateModeDisplay() {
         const mode = GM_getValue('downloadMode', 'marker');
         updateModeToggle(mode);
+        updateModeVisibility(mode);
         updateMarkerDisplay();
         updateResumeDisplay();
     }
@@ -823,6 +808,14 @@
             const active = button.dataset.mode === mode;
             button.classList.toggle('is-active', active);
             button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+    }
+
+    function updateModeVisibility(mode) {
+        const isFull = mode === 'full';
+        const elements = document.querySelectorAll('.xld-full-only');
+        elements.forEach(element => {
+            element.style.display = isFull ? '' : 'none';
         });
     }
 
@@ -838,7 +831,7 @@
         if (savedMarker && savedMarker.id) {
             // 显示缩略图和标题
             let thumbHtml = '';
-            if (savedMarker.thumbnail) {
+            if (savedMarker.thumbnail && isMarkerMode) {
                 thumbHtml = `<img class="xld-marker-thumb" src="${savedMarker.thumbnail}" alt="缩略图">`;
             }
 
