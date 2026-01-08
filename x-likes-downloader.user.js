@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Likes 下载器
 // @namespace    https://github.com/K4F7/x-like-downloader
-// @version      2.0.0
+// @version      2.1.0
 // @description  下载 X (Twitter) 点赞列表中的图片、GIF和视频
 // @author       You
 // @icon         https://abs.twimg.com/favicons/twitter.3.ico
@@ -131,6 +131,7 @@
         }
         .xld-input-row {
             display: flex;
+            flex-wrap: wrap;
             gap: 10px;
             align-items: center;
             margin-top: 10px;
@@ -188,6 +189,29 @@
         }
         .xld-btn-secondary:hover {
             background: rgba(29, 155, 240, 0.1);
+        }
+        .xld-foreground-warning {
+            position: fixed;
+            top: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10000;
+            max-width: 92%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            background: #f4212e;
+            color: #fff;
+            font-size: 14px;
+            font-weight: 700;
+            box-shadow: 0 10px 24px rgba(0,0,0,0.35);
+            display: none;
+            text-align: center;
+        }
+        .xld-foreground-warning.active {
+            display: block;
+        }
+        .xld-foreground-warning span {
+            font-weight: 500;
         }
         .xld-status {
             margin-top: 16px;
@@ -350,11 +374,14 @@
     `);
 
     // ========== 状态 ==========
+    const RESUME_ANCHOR_COUNT = 10;
     let isScanning = false;
     let collectedMedia = [];
     let lastScanMode = 'marker';
     let lastScanStopReason = null;
-    let pendingResumePoint = null;
+    let pendingResumeSnapshot = null;
+    let isDownloading = false;
+    let foregroundWarningEl = null;
 
     // ========== UI ==========
     function createPanel() {
@@ -402,6 +429,16 @@
                         <input type="number" id="xld-download-limit" class="xld-date-input" min="1" step="1">
                     </div>
                     <div class="xld-input-note">建议 200 个媒体/次，可自行调整</div>
+                    <div class="xld-input-row">
+                        <label class="xld-checkbox-label">
+                            <input type="checkbox" id="xld-safe-mode">
+                            安全模式（慢速定位）
+                        </label>
+                        <label class="xld-checkbox-label">
+                            <input type="checkbox" id="xld-auto-pause">
+                            后台自动暂停
+                        </label>
+                    </div>
                     <div class="xld-resume-info" id="xld-resume-info" style="display:none">
                         <span id="xld-resume-text">续传点：未设置</span>
                         <button class="xld-btn-small" id="xld-clear-resume-btn">清除</button>
@@ -485,6 +522,22 @@
             });
         }
 
+        const safeModeCheckbox = panel.querySelector('#xld-safe-mode');
+        if (safeModeCheckbox) {
+            safeModeCheckbox.checked = GM_getValue('safeMode', false);
+            safeModeCheckbox.addEventListener('change', () => {
+                GM_setValue('safeMode', safeModeCheckbox.checked);
+            });
+        }
+
+        const autoPauseCheckbox = panel.querySelector('#xld-auto-pause');
+        if (autoPauseCheckbox) {
+            autoPauseCheckbox.checked = GM_getValue('autoPause', false);
+            autoPauseCheckbox.addEventListener('change', () => {
+                GM_setValue('autoPause', autoPauseCheckbox.checked);
+            });
+        }
+
         // 初始化显示
         updateModeDisplay();
 
@@ -501,11 +554,48 @@
         panelElements.panel.classList.add('active');
     }
 
+    document.addEventListener('visibilitychange', () => {
+        updateForegroundWarning();
+    });
+
     function closePanel() {
         if (panelElements) {
             panelElements.overlay.classList.remove('active');
             panelElements.panel.classList.remove('active');
         }
+    }
+
+    function ensureForegroundWarning() {
+        if (foregroundWarningEl) return;
+        foregroundWarningEl = document.createElement('div');
+        foregroundWarningEl.className = 'xld-foreground-warning';
+        document.body.appendChild(foregroundWarningEl);
+    }
+
+    function showForegroundWarning(message) {
+        ensureForegroundWarning();
+        foregroundWarningEl.innerHTML = message;
+        foregroundWarningEl.classList.add('active');
+    }
+
+    function hideForegroundWarning() {
+        if (foregroundWarningEl) {
+            foregroundWarningEl.classList.remove('active');
+        }
+    }
+
+    function updateForegroundWarning() {
+        if (!isScanning && !isDownloading) {
+            hideForegroundWarning();
+            return;
+        }
+
+        if (document.hidden) {
+            showForegroundWarning('当前标签页在后台，扫描/下载可能停滞。<span>请切回前台或单独拉出窗口。</span>');
+            return;
+        }
+
+        showForegroundWarning('请保持当前标签页在前台以保证扫描和下载正常进行。<span>建议单独拉出窗口。</span>');
     }
 
     function getDownloadMode() {
@@ -521,6 +611,18 @@
         return 200;
     }
 
+    function getSafeMode() {
+        const input = document.getElementById('xld-safe-mode');
+        if (input) return input.checked;
+        return GM_getValue('safeMode', false);
+    }
+
+    function getAutoPause() {
+        const input = document.getElementById('xld-auto-pause');
+        if (input) return input.checked;
+        return GM_getValue('autoPause', false);
+    }
+
     function updateResumeDisplay() {
         const resumeInfo = document.getElementById('xld-resume-info');
         const resumeText = document.getElementById('xld-resume-text');
@@ -532,7 +634,8 @@
             return;
         }
 
-        const savedResume = GM_getValue('fullResumePoint', null);
+        const savedSnapshot = GM_getValue('fullResumeSnapshot', null);
+        const savedResume = savedSnapshot?.resumePoint || GM_getValue('fullResumePoint', null);
         if (savedResume && savedResume.id) {
             const shortId = savedResume.id.substring(0, 8) + '...';
             const displayText = savedResume.text || '(无文字内容)';
@@ -595,11 +698,22 @@
     }
 
     function clearResumePoint() {
-        if (confirm('确定要清除续传点吗？')) {
-            GM_setValue('fullResumePoint', null);
-            updateResumeDisplay();
-            updateStatus('续传点已清除');
+        if (!confirm('确定要清除续传点吗？此操作会让全量下载从头开始。')) {
+            return;
         }
+        const confirmText = prompt('请输入“清除”以确认继续：');
+        if (confirmText !== '清除') {
+            updateStatus('已取消清除续传点');
+            return;
+        }
+        if (!confirm('最后确认：是否清除续传点？')) {
+            updateStatus('已取消清除续传点');
+            return;
+        }
+        GM_setValue('fullResumePoint', null);
+        GM_setValue('fullResumeSnapshot', null);
+        updateResumeDisplay();
+        updateStatus('续传点已清除');
     }
 
     // ========== 选择模式 ==========
@@ -869,7 +983,7 @@
         const mode = getDownloadMode();
         const types = getSelectedTypes();
         const limit = getDownloadLimit();
-        const scanOptions = { mode, limit };
+        const scanOptions = { mode, limit, safetyMode: getSafeMode(), autoPause: getAutoPause() };
         let statusText = '开始扫描...';
 
         if (mode === 'marker') {
@@ -881,15 +995,17 @@
             scanOptions.savedMarker = savedMarker;
             statusText = '开始扫描（到标记点停止）...';
         } else {
-            const resumePoint = GM_getValue('fullResumePoint', null);
+            const resumeSnapshot = GM_getValue('fullResumeSnapshot', null);
+            const resumePoint = resumeSnapshot?.resumePoint || GM_getValue('fullResumePoint', null);
             scanOptions.resumePoint = resumePoint;
+            scanOptions.anchors = resumeSnapshot?.anchors || null;
             statusText = resumePoint ? '开始扫描（从上次进度继续）...' : '开始扫描（全量下载）...';
         }
 
         isScanning = true;
         lastScanMode = mode;
         lastScanStopReason = null;
-        pendingResumePoint = null;
+        pendingResumeSnapshot = null;
         collectedMedia = [];
         firstTweetInfo = null;
 
@@ -901,25 +1017,34 @@
         downloadBtn.style.display = 'none';
 
         updateStatus(statusText, 0);
+        updateForegroundWarning();
 
         try {
             const scanResult = await scanLikes(types, scanOptions);
             lastScanStopReason = scanResult.stopReason;
-            pendingResumePoint = scanResult.resumePoint || null;
+            pendingResumeSnapshot = scanResult.resumeSnapshot || null;
 
+            let completionMsg = '';
             if (scanResult.stopReason === 'marker') {
-                updateStatus(`扫描完成！找到 ${collectedMedia.length} 个新文件（已到达标记点）`, 100);
+                completionMsg = `扫描完成！找到 ${collectedMedia.length} 个新文件（已到达标记点）`;
             } else if (scanResult.stopReason === 'limit') {
-                updateStatus(`扫描完成！已达到单次上限（${limit} 个媒体）`, 100);
+                completionMsg = `扫描完成！已达到单次上限（${limit} 个媒体）`;
             } else if (scanResult.stopReason === 'resume-missing') {
-                updateStatus('未找到续传点，请清除续传点后重试', 100);
+                completionMsg = '未找到续传点，请清除续传点后重试';
                 if (mode === 'full') {
                     GM_setValue('fullResumePoint', null);
+                    GM_setValue('fullResumeSnapshot', null);
                     updateResumeDisplay();
                 }
             } else {
-                updateStatus(`扫描完成！找到 ${collectedMedia.length} 个文件`, 100);
+                completionMsg = `扫描完成！找到 ${collectedMedia.length} 个文件`;
             }
+
+            if (scanResult.fallbackUsed) {
+                completionMsg += '（续传点未找到，已使用锚点继续下载，可能有少量重复）';
+            }
+
+            updateStatus(completionMsg, 100);
 
             if (collectedMedia.length > 0) {
                 downloadBtn.style.display = 'block';
@@ -938,6 +1063,7 @@
         isScanning = false;
         scanBtn.disabled = false;
         scanBtn.textContent = '重新扫描';
+        updateForegroundWarning();
     }
 
     function getCurrentUsername() {
@@ -965,9 +1091,16 @@
         const mode = options?.mode || 'marker';
         const savedMarker = options?.savedMarker || null;
         const resumePoint = options?.resumePoint || null;
+        const anchors = options?.anchors || null;
         const limit = Number.isFinite(options?.limit) && options.limit > 0 ? options.limit : Infinity;
+        const safetyMode = !!options?.safetyMode;
+        const autoPause = !!options?.autoPause;
         let resumeFound = !resumePoint;
-        let limitResumePoint = null;
+        let fallbackUsed = false;
+        let seekStatusShown = false;
+        let limitResumeSnapshot = null;
+        let seekMode = resumePoint ? (safetyMode ? 'lock' : 'fast') : 'none';
+        let lockNoticeShown = false;
 
         console.log('[XLD] ========== 开始扫描 ==========');
         if (mode === 'marker') {
@@ -977,10 +1110,13 @@
         }
 
         while (noNewContentCount < 8 && !reachedMarker && !reachedLimit) {
+            await waitForForegroundIfNeeded(autoPause);
+
             // 获取当前可见的推文
             const tweets = document.querySelectorAll('[data-testid="tweet"]');
 
             for (const tweet of tweets) {
+                await waitForForegroundIfNeeded(autoPause);
                 const tweetId = extractTweetId(tweet);
 
                 // 如果无法提取ID，跳过
@@ -1002,9 +1138,34 @@
                 totalScanned++;
 
                 if (mode === 'full' && !resumeFound) {
+                    if (!seekStatusShown) {
+                        updateStatus('正在定位续传点...', null);
+                        seekStatusShown = true;
+                    }
+                    let anchorSide = null;
+                    if (anchors) {
+                        anchorSide = matchAnchorTweet(tweet, anchors);
+                    }
+                    if (anchorSide === 'before') {
+                        fallbackUsed = true;
+                        resumeFound = true;
+                        updateStatus('续传点未出现，已使用锚点继续下载（可能有少量重复）', null);
+                        continue;
+                    }
+                    if (seekMode === 'fast' && anchorSide) {
+                        seekMode = 'lock';
+                        if (!lockNoticeShown) {
+                            updateStatus('已定位到快照区间，正在精确定位续传点...', null);
+                            lockNoticeShown = true;
+                        }
+                    }
                     if (isResumeTweet(tweet, resumePoint)) {
                         resumeFound = true;
+                        updateStatus('已定位续传点，开始下载...', null);
                         continue;
+                    }
+                    if (totalScanned % 30 === 0) {
+                        updateStatus(`正在定位续传点... 已扫描 ${totalScanned} 条`, null);
                     }
                     continue;
                 }
@@ -1032,7 +1193,7 @@
                 if (collectedMedia.length >= limit) {
                     reachedLimit = true;
                     if (mode === 'full') {
-                        limitResumePoint = extractTweetInfo(tweet);
+                        limitResumeSnapshot = buildResumeSnapshot(tweet);
                     }
                     break;
                 }
@@ -1042,10 +1203,18 @@
 
             if (reachedMarker || reachedLimit) break;
 
-            // 【关键改进】逐步滚动，而不是直接到底部
-            const scrollStep = window.innerHeight * 0.8; // 每次滚动80%屏幕高度
+            // 根据是否在定位续传点调整滚动速度
+            const seeking = mode === 'full' && resumePoint && !resumeFound;
+            const fastSeeking = seeking && seekMode === 'fast' && !safetyMode;
+            const slowSeeking = seeking && !fastSeeking;
+            const scrollStep = fastSeeking
+                ? window.innerHeight * 2.2
+                : slowSeeking
+                    ? window.innerHeight * 0.6
+                    : window.innerHeight * 0.8;
+            const delayMs = fastSeeking ? 200 : slowSeeking ? 900 : 800;
             window.scrollBy(0, scrollStep);
-            await sleep(800); // 等待推文加载
+            await sleep(delayMs); // 等待推文加载
 
             // 检查是否有新推文加载
             const currentSeenCount = seenTweetIds.size;
@@ -1062,11 +1231,11 @@
         console.log(`[XLD] 共扫描 ${totalScanned} 条，找到 ${collectedMedia.length} 个媒体，到达标记点: ${reachedMarker}, 达到上限: ${reachedLimit}`);
 
         if (mode === 'full' && resumePoint && !resumeFound) {
-            return { stopReason: 'resume-missing', resumePoint: null };
+            return { stopReason: 'resume-missing', resumePoint: null, resumeSnapshot: null, fallbackUsed };
         }
-        if (reachedMarker) return { stopReason: 'marker', resumePoint: null };
-        if (reachedLimit) return { stopReason: 'limit', resumePoint: limitResumePoint };
-        return { stopReason: 'end', resumePoint: null };
+        if (reachedMarker) return { stopReason: 'marker', resumePoint: null, fallbackUsed };
+        if (reachedLimit) return { stopReason: 'limit', resumePoint: null, resumeSnapshot: limitResumeSnapshot, fallbackUsed };
+        return { stopReason: 'end', resumePoint: null, resumeSnapshot: null, fallbackUsed };
     }
 
     function extractMediaFromTweet(tweet, types) {
@@ -1238,6 +1407,49 @@
         return { id, fullText, mediaId, authorUsername };
     }
 
+    function buildResumeSnapshot(targetTweet) {
+        const resumePoint = extractTweetInfo(targetTweet);
+        const snapshot = {
+            resumePoint: resumePoint || null,
+            anchors: { before: [], after: [] },
+            timestamp: Date.now()
+        };
+
+        if (!resumePoint || !resumePoint.id) return snapshot;
+
+        const tweets = Array.from(document.querySelectorAll('[data-testid="tweet"]'));
+        if (tweets.length === 0) return snapshot;
+
+        const targetIndex = tweets.findIndex(item => extractTweetId(item) === resumePoint.id);
+        if (targetIndex === -1) return snapshot;
+
+        const beforeTweets = tweets.slice(Math.max(0, targetIndex - RESUME_ANCHOR_COUNT), targetIndex);
+        const afterTweets = tweets.slice(targetIndex + 1, targetIndex + 1 + RESUME_ANCHOR_COUNT);
+
+        snapshot.anchors.before = beforeTweets
+            .map(extractFullTweetInfo)
+            .filter(info => info && info.id);
+        snapshot.anchors.after = afterTweets
+            .map(extractFullTweetInfo)
+            .filter(info => info && info.id);
+
+        return snapshot;
+    }
+
+    function matchAnchorTweet(tweet, anchors) {
+        if (!anchors) return null;
+        const before = Array.isArray(anchors.before) ? anchors.before : [];
+        const after = Array.isArray(anchors.after) ? anchors.after : [];
+
+        for (const anchor of before) {
+            if (isMatchTweet(tweet, anchor, '快照(前)')) return 'before';
+        }
+        for (const anchor of after) {
+            if (isMatchTweet(tweet, anchor, '快照(后)')) return 'after';
+        }
+        return null;
+    }
+
     function isMatchTweet(tweet, savedPoint, label) {
         if (!savedPoint) return false;
 
@@ -1302,7 +1514,10 @@
         }
 
         const downloadBtn = document.getElementById('xld-download-btn');
+        const autoPause = getAutoPause();
         downloadBtn.disabled = true;
+        isDownloading = true;
+        updateForegroundWarning();
 
         // 生成文件名：[Xlike]2024-01-08.zip
         const dateStr = new Date().toISOString().split('T')[0];
@@ -1315,6 +1530,8 @@
         if (typeof fflate === 'undefined') {
             updateStatus('fflate 未加载，请刷新页面重试');
             downloadBtn.disabled = false;
+            isDownloading = false;
+            updateForegroundWarning();
             return;
         }
 
@@ -1324,6 +1541,7 @@
 
         // 第一步：下载所有文件到内存
         for (const item of collectedMedia) {
+            await waitForForegroundIfNeeded(autoPause);
             try {
                 updateStatus(`下载中 (${completed + 1}/${collectedMedia.length}): ${item.filename}`, (completed / collectedMedia.length) * 70);
 
@@ -1346,6 +1564,8 @@
         if (Object.keys(files).length === 0) {
             updateStatus('所有文件下载失败，请检查网络');
             downloadBtn.disabled = false;
+            isDownloading = false;
+            updateForegroundWarning();
             return;
         }
 
@@ -1383,9 +1603,11 @@
 
             // 更新续传点（全量下载模式）
             if (lastScanMode === 'full') {
-                if (lastScanStopReason === 'limit' && pendingResumePoint && pendingResumePoint.id) {
-                    GM_setValue('fullResumePoint', pendingResumePoint);
+                if (lastScanStopReason === 'limit' && pendingResumeSnapshot && pendingResumeSnapshot.resumePoint?.id) {
+                    GM_setValue('fullResumeSnapshot', pendingResumeSnapshot);
+                    GM_setValue('fullResumePoint', pendingResumeSnapshot.resumePoint);
                 } else if (lastScanStopReason === 'end') {
+                    GM_setValue('fullResumeSnapshot', null);
                     GM_setValue('fullResumePoint', null);
                 }
                 updateResumeDisplay();
@@ -1399,7 +1621,9 @@
             console.error('ZIP生成错误:', error);
         }
 
+        isDownloading = false;
         downloadBtn.disabled = false;
+        updateForegroundWarning();
     }
 
     function fetchMedia(url) {
@@ -1436,6 +1660,14 @@
     // ========== 工具函数 ==========
     function sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    async function waitForForegroundIfNeeded(autoPause) {
+        if (!autoPause) return;
+        while (document.hidden) {
+            updateStatus('标签页在后台，已暂停。请切回前台继续。', null);
+            await sleep(1000);
+        }
     }
 
     // ========== API 相关 ==========
