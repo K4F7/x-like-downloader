@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Likes 下载器
 // @namespace    https://github.com/K4F7/x-like-downloader
-// @version      2.1.12
+// @version      2.1.13
 // @description  下载 X (Twitter) 点赞列表中的图片、GIF和视频
 // @author       You
 // @icon         https://abs.twimg.com/favicons/twitter.3.ico
@@ -1364,6 +1364,9 @@
         let lockNoticeShown = false;
         let anchorSearchAttempted = false;
         let anchorSearchQueued = null;
+        let anchorMissingAttempts = 0;
+        let slowSeekNoticeShown = false;
+        const anchorMissingMaxAttempts = 2;
 
         console.log('[XLD] ========== 开始扫描 ==========');
         if (mode === 'marker') {
@@ -1494,6 +1497,18 @@
                     anchorSearchQueued.side
                 );
                 anchorSearchQueued = null;
+                if (anchorResult?.anchorMissing) {
+                    anchorMissingAttempts++;
+                    seekMode = 'lock';
+                    if (!slowSeekNoticeShown) {
+                        updateStatus('未找到锚点，改为慢扫定位续传点...', null);
+                        slowSeekNoticeShown = true;
+                    }
+                    if (anchorMissingAttempts <= anchorMissingMaxAttempts) {
+                        noNewContentCount = 0;
+                        lastSeenCount = seenTweetIds.size;
+                    }
+                }
                 if (anchorResult?.found || anchorResult?.fallback) {
                     resumeFound = true;
                     fallbackUsed = fallbackUsed || !!anchorResult.fallback;
@@ -1511,7 +1526,7 @@
                     noNewContentCount = 0;
                     lastSeenCount = seenTweetIds.size;
                     continue;
-                } else {
+                } else if (!anchorResult?.anchorMissing) {
                     anchorSearchAttempted = false;
                 }
             }
@@ -1547,6 +1562,18 @@
             if (mode === 'full' && resumePoint && !resumeFound && anchors && !anchorSearchAttempted && noNewContentCount >= 8) {
                 anchorSearchAttempted = true;
                 const anchorResult = await searchResumeAroundAnchors(resumePoint, anchors, autoPause, anchorSearchCount, null);
+                if (anchorResult?.anchorMissing) {
+                    anchorMissingAttempts++;
+                    seekMode = 'lock';
+                    if (!slowSeekNoticeShown) {
+                        updateStatus('未找到锚点，改为慢扫定位续传点...', null);
+                        slowSeekNoticeShown = true;
+                    }
+                    if (anchorMissingAttempts <= anchorMissingMaxAttempts) {
+                        noNewContentCount = 0;
+                        lastSeenCount = seenTweetIds.size;
+                    }
+                }
                 if (anchorResult?.found || anchorResult?.fallback) {
                     resumeFound = true;
                     fallbackUsed = fallbackUsed || !!anchorResult.fallback;
@@ -1647,7 +1674,7 @@
 
         updateStatus('续传点未出现，正在定位锚点并二次搜索...', null);
         const anchorLocated = await scrollToAnyAnchor(anchors, autoPause, preferredSide);
-        if (!anchorLocated) return { found: false, fallback: false };
+        if (!anchorLocated) return { found: false, fallback: false, anchorMissing: true };
 
         updateStatus('已定位锚点，正在上下搜索续传点...', null);
         const found = await scanResumeAroundAnchor(resumePoint, autoPause, anchorSearchCount, anchorLocated.side);
