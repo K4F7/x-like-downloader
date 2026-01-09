@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Likes 下载器
 // @namespace    https://github.com/K4F7/x-like-downloader
-// @version      2.1.17
+// @version      2.1.20
 // @description  下载 X (Twitter) 点赞列表中的图片、GIF和视频
 // @author       You
 // @icon         https://abs.twimg.com/favicons/twitter.3.ico
@@ -12,7 +12,6 @@
 // @grant        GM_addStyle
 // @grant        GM_setValue
 // @grant        GM_getValue
-// @grant        GM_download
 // @connect      pbs.twimg.com
 // @connect      video.twimg.com
 // @connect      abs.twimg.com
@@ -24,8 +23,7 @@
 (function() {
     'use strict';
 
-    // ========== 样式 ==========
-    GM_addStyle(`
+    const STYLE_TEXT = `
         .xld-overlay {
             position: fixed;
             top: 0;
@@ -95,12 +93,7 @@
             margin-bottom: 10px;
             color: #8b98a5;
         }
-        .xld-date-row {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-        }
-        .xld-select, .xld-date-input {
+        .xld-date-input {
             flex: 1;
             padding: 10px 12px;
             background: #273340;
@@ -109,7 +102,7 @@
             color: #e7e9ea;
             font-size: 14px;
         }
-        .xld-select:focus, .xld-date-input:focus {
+        .xld-date-input:focus {
             outline: none;
             border-color: #1d9bf0;
         }
@@ -293,14 +286,6 @@
             width: 0%;
             transition: width 0.3s;
         }
-        .xld-date-custom {
-            display: none;
-            margin-top: 10px;
-        }
-        .xld-date-custom.active {
-            display: flex;
-            gap: 10px;
-        }
         .xld-marker-info {
             padding: 12px;
             background: #273340;
@@ -437,9 +422,113 @@
             margin-bottom: 12px;
             line-height: 1.5;
         }
-    `);
+    `;
 
-    // ========== 状态 ==========
+    const PANEL_HTML = `
+        <div class="xld-header">
+            <span class="xld-title">X Likes 下载器</span>
+            <button class="xld-close">✕</button>
+        </div>
+        <div class="xld-body">
+            <div class="xld-section xld-full-only" id="xld-resume-section">
+                <div class="xld-marker-header">
+                    <div class="xld-label" style="margin-bottom:0">续传点</div>
+                    <div class="xld-marker-actions" id="xld-resume-actions">
+                        <button class="xld-btn-small" id="xld-select-resume-btn">选择</button>
+                        <button class="xld-btn-small" id="xld-clear-resume-btn">清除</button>
+                    </div>
+                </div>
+                <div class="xld-marker-info" id="xld-resume-info">
+                    <span class="xld-marker-empty">未设置续传点</span>
+                </div>
+                <div class="xld-fallback-wrap" id="xld-fallback-wrap" style="display:none">
+                    <div class="xld-fallback-label">自动回退锚点</div>
+                    <div class="xld-marker-info" id="xld-fallback-info"></div>
+                </div>
+            </div>
+            <div class="xld-section xld-marker-only">
+                <div class="xld-marker-header">
+                    <div class="xld-label" style="margin-bottom:0">标记点</div>
+                    <div class="xld-marker-actions" id="xld-marker-actions" style="display:none">
+                        <button class="xld-btn-small" id="xld-select-marker-btn">选择</button>
+                        <button class="xld-btn-small xld-btn-danger" id="xld-clear-marker-btn">清除</button>
+                    </div>
+                </div>
+                <div class="xld-marker-info" id="xld-marker-info">
+                    <span class="xld-marker-empty">未设置标记点</span>
+                </div>
+                <div class="xld-marker-hint">扫描到标记点会自动停止，只下载新内容</div>
+            </div>
+            <div class="xld-section">
+                <div class="xld-label">下载模式</div>
+                <div class="xld-mode-toggle" id="xld-mode-toggle">
+                    <button type="button" class="xld-mode-btn" data-mode="marker" aria-pressed="true">标记点</button>
+                    <button type="button" class="xld-mode-btn" data-mode="full" aria-pressed="false">全量下载</button>
+                </div>
+                <div class="xld-input-row xld-full-only">
+                    <span class="xld-input-label">单次上限</span>
+                    <input type="number" id="xld-download-limit" class="xld-date-input" min="1" step="1">
+                </div>
+                <div class="xld-input-note xld-full-only">建议 200 个媒体/次，可自行调整</div>
+                <div class="xld-input-row xld-full-only">
+                    <label class="xld-checkbox-label">
+                        <input type="checkbox" id="xld-safe-mode">
+                        安全模式（慢速定位）
+                    </label>
+                </div>
+                <div class="xld-input-row">
+                    <label class="xld-checkbox-label">
+                        <input type="checkbox" id="xld-auto-pause">
+                        后台自动暂停
+                    </label>
+                </div>
+            </div>
+            <div class="xld-section" id="xld-init-section" style="display:none">
+                <div class="xld-init-notice">首次使用，请先设置标记点。这会记住当前位置，之后只下载新点赞的内容。</div>
+                <button class="xld-btn xld-btn-primary" id="xld-init-btn">自动设置（第一条）</button>
+                <button class="xld-btn xld-btn-secondary" id="xld-init-select-btn">手动选择推文</button>
+            </div>
+            <div class="xld-section">
+                <div class="xld-label">下载类型</div>
+                <div class="xld-checkbox-group">
+                    <label class="xld-checkbox-label">
+                        <input type="checkbox" id="xld-type-image" checked>
+                        图片
+                    </label>
+                    <label class="xld-checkbox-label">
+                        <input type="checkbox" id="xld-type-gif" checked>
+                        GIF
+                    </label>
+                    <label class="xld-checkbox-label">
+                        <input type="checkbox" id="xld-type-video">
+                        视频
+                    </label>
+                </div>
+            </div>
+            <div class="xld-btn-group">
+                <button class="xld-btn xld-btn-primary" id="xld-scan-btn">开始扫描</button>
+                <button class="xld-btn xld-btn-primary" id="xld-download-btn" style="display:none">下载全部</button>
+            </div>
+            <div class="xld-status" id="xld-status">
+                <span id="xld-status-text">准备就绪</span>
+                <div class="xld-progress">
+                    <div class="xld-progress-bar" id="xld-progress-bar"></div>
+                </div>
+            </div>
+        </div>
+    `.trim();
+
+    const WARNING_HTML = `
+        <div class="xld-warning-icon"><span>!</span></div>
+        <div class="xld-warning-message"></div>
+        <div class="xld-warning-status"></div>
+        <div class="xld-warning-progress">
+            <div class="xld-warning-progress-bar"></div>
+        </div>
+    `.trim();
+
+    GM_addStyle(STYLE_TEXT);
+
     const RESUME_ANCHOR_COUNT = 10;
     const ANCHOR_SEARCH_COUNT = 30;
     let isScanning = false;
@@ -447,13 +536,85 @@
     let lastScanMode = 'marker';
     let lastScanStopReason = null;
     let pendingResumeSnapshot = null;
-    let lastFallbackAnchor = null;
     let isDownloading = false;
     let foregroundWarningEl = null;
     let lastStatusText = '准备就绪';
     let lastProgressValue = null;
 
-    // ========== UI ==========
+    const SETTING_DEFS = {
+        downloadLimit: {
+            id: 'xld-download-limit',
+            key: 'downloadLimit',
+            defaultValue: 200,
+            type: 'number',
+            validate: value => value > 0
+        },
+        safeMode: {
+            id: 'xld-safe-mode',
+            key: 'safeMode',
+            defaultValue: false,
+            type: 'boolean'
+        },
+        autoPause: {
+            id: 'xld-auto-pause',
+            key: 'autoPause',
+            defaultValue: true,
+            type: 'boolean'
+        },
+        preloadBuffer: {
+            id: 'xld-preload-buffer',
+            key: 'preloadBuffer',
+            defaultValue: 50,
+            type: 'number',
+            validate: value => value >= 0
+        }
+    };
+
+    function normalizeNumberSetting(def, value) {
+        const parsed = Number.isFinite(value) ? value : parseInt(value, 10);
+        if (Number.isFinite(parsed) && (!def.validate || def.validate(parsed))) {
+            return parsed;
+        }
+        return def.defaultValue;
+    }
+
+    function getSetting(def) {
+        if (!def) return null;
+        const input = def.id ? document.getElementById(def.id) : null;
+        if (def.type === 'number') {
+            const value = input ? parseInt(input.value, 10) : GM_getValue(def.key, def.defaultValue);
+            return normalizeNumberSetting(def, value);
+        }
+        if (input) return !!input.checked;
+        return GM_getValue(def.key, def.defaultValue);
+    }
+
+    function bindSetting(panel, def) {
+        if (!def || !def.id || !panel) return;
+        const input = panel.querySelector(`#${def.id}`);
+        if (!input) return;
+        if (def.type === 'number') {
+            const savedValue = GM_getValue(def.key, def.defaultValue);
+            const normalized = normalizeNumberSetting(def, savedValue);
+            input.value = normalized;
+            input.addEventListener('change', () => {
+                const value = parseInt(input.value, 10);
+                const nextValue = normalizeNumberSetting(def, value);
+                input.value = nextValue;
+                GM_setValue(def.key, nextValue);
+            });
+            return;
+        }
+        input.checked = !!GM_getValue(def.key, def.defaultValue);
+        input.addEventListener('change', () => {
+            GM_setValue(def.key, input.checked);
+        });
+    }
+
+    function bindSettings(panel) {
+        Object.values(SETTING_DEFS).forEach(def => bindSetting(panel, def));
+    }
+
     function createPanel() {
         const overlay = document.createElement('div');
         overlay.className = 'xld-overlay';
@@ -461,119 +622,25 @@
 
         const panel = document.createElement('div');
         panel.className = 'xld-panel';
-        panel.innerHTML = `
-            <div class="xld-header">
-                <span class="xld-title">X Likes 下载器</span>
-                <button class="xld-close">✕</button>
-            </div>
-            <div class="xld-body">
-                <div class="xld-section xld-full-only" id="xld-resume-section">
-                    <div class="xld-marker-header">
-                        <div class="xld-label" style="margin-bottom:0">续传点</div>
-                        <div class="xld-marker-actions" id="xld-resume-actions">
-                            <button class="xld-btn-small" id="xld-select-resume-btn">选择</button>
-                            <button class="xld-btn-small" id="xld-clear-resume-btn">清除</button>
-                        </div>
-                    </div>
-                    <div class="xld-marker-info" id="xld-resume-info">
-                        <span class="xld-marker-empty">未设置续传点</span>
-                    </div>
-                    <div class="xld-fallback-wrap" id="xld-fallback-wrap" style="display:none">
-                        <div class="xld-fallback-label">自动回退锚点</div>
-                        <div class="xld-marker-info" id="xld-fallback-info"></div>
-                    </div>
-                </div>
-                <div class="xld-section xld-marker-only">
-                    <div class="xld-marker-header">
-                        <div class="xld-label" style="margin-bottom:0">标记点</div>
-                        <div class="xld-marker-actions" id="xld-marker-actions" style="display:none">
-                            <button class="xld-btn-small" id="xld-select-marker-btn">选择</button>
-                            <button class="xld-btn-small xld-btn-danger" id="xld-clear-marker-btn">清除</button>
-                        </div>
-                    </div>
-                    <div class="xld-marker-info" id="xld-marker-info">
-                        <span class="xld-marker-empty">未设置标记点</span>
-                    </div>
-                    <div class="xld-marker-hint">
-                        扫描到标记点会自动停止，只下载新内容
-                    </div>
-                </div>
-                <div class="xld-section">
-                    <div class="xld-label">下载模式</div>
-                    <div class="xld-mode-toggle" id="xld-mode-toggle">
-                        <button type="button" class="xld-mode-btn" data-mode="marker" aria-pressed="true">标记点</button>
-                        <button type="button" class="xld-mode-btn" data-mode="full" aria-pressed="false">全量下载</button>
-                    </div>
-                    <div class="xld-input-row xld-full-only">
-                        <span class="xld-input-label">单次上限</span>
-                        <input type="number" id="xld-download-limit" class="xld-date-input" min="1" step="1">
-                    </div>
-                    <div class="xld-input-note xld-full-only">建议 200 个媒体/次，可自行调整</div>
-                    <div class="xld-input-row xld-full-only">
-                        <label class="xld-checkbox-label">
-                            <input type="checkbox" id="xld-safe-mode">
-                            安全模式（慢速定位）
-                        </label>
-                    </div>
-                    <div class="xld-input-row">
-                        <label class="xld-checkbox-label">
-                            <input type="checkbox" id="xld-auto-pause">
-                            后台自动暂停
-                        </label>
-                    </div>
-                </div>
-                <div class="xld-section" id="xld-init-section" style="display:none">
-                    <div class="xld-init-notice">
-                        首次使用，请先设置标记点。这会记住当前位置，之后只下载新点赞的内容。
-                    </div>
-                    <button class="xld-btn xld-btn-primary" id="xld-init-btn">自动设置（第一条）</button>
-                    <button class="xld-btn xld-btn-secondary" id="xld-init-select-btn">手动选择推文</button>
-                </div>
-                <div class="xld-section">
-                    <div class="xld-label">下载类型</div>
-                    <div class="xld-checkbox-group">
-                        <label class="xld-checkbox-label">
-                            <input type="checkbox" id="xld-type-image" checked>
-                            图片
-                        </label>
-                        <label class="xld-checkbox-label">
-                            <input type="checkbox" id="xld-type-gif" checked>
-                            GIF
-                        </label>
-                        <label class="xld-checkbox-label">
-                            <input type="checkbox" id="xld-type-video">
-                            视频
-                        </label>
-                    </div>
-                </div>
-                <div class="xld-btn-group">
-                    <button class="xld-btn xld-btn-primary" id="xld-scan-btn">开始扫描</button>
-                    <button class="xld-btn xld-btn-primary" id="xld-download-btn" style="display:none">
-                        下载全部
-                    </button>
-                </div>
-                <div class="xld-status" id="xld-status">
-                    <span id="xld-status-text">准备就绪</span>
-                    <div class="xld-progress">
-                        <div class="xld-progress-bar" id="xld-progress-bar"></div>
-                    </div>
-                </div>
-            </div>
-        `;
+        panel.innerHTML = PANEL_HTML;
 
         document.body.appendChild(overlay);
         document.body.appendChild(panel);
 
-        // 事件绑定
-        panel.querySelector('.xld-close').addEventListener('click', closePanel);
-        panel.querySelector('#xld-scan-btn').addEventListener('click', startScan);
-        panel.querySelector('#xld-download-btn').addEventListener('click', downloadAll);
-        panel.querySelector('#xld-clear-marker-btn').addEventListener('click', clearMarker);
-        panel.querySelector('#xld-init-btn').addEventListener('click', initMarker);
-        panel.querySelector('#xld-init-select-btn').addEventListener('click', () => enterSelectMode('marker'));
-        panel.querySelector('#xld-select-marker-btn').addEventListener('click', () => enterSelectMode('marker'));
-        panel.querySelector('#xld-select-resume-btn').addEventListener('click', () => enterSelectMode('resume'));
-        panel.querySelector('#xld-clear-resume-btn').addEventListener('click', clearResumePoint);
+        [
+            ['.xld-close', closePanel],
+            ['#xld-scan-btn', startScan],
+            ['#xld-download-btn', downloadAll],
+            ['#xld-clear-marker-btn', clearMarker],
+            ['#xld-init-btn', initMarker],
+            ['#xld-init-select-btn', () => enterSelectMode('marker')],
+            ['#xld-select-marker-btn', () => enterSelectMode('marker')],
+            ['#xld-select-resume-btn', () => enterSelectMode('resume')],
+            ['#xld-clear-resume-btn', clearResumePoint]
+        ].forEach(([selector, handler]) => {
+            const target = panel.querySelector(selector);
+            if (target) target.addEventListener('click', handler);
+        });
 
         const modeButtons = panel.querySelectorAll('.xld-mode-btn');
         modeButtons.forEach(button => {
@@ -587,47 +654,8 @@
         const savedMode = GM_getValue('downloadMode', 'marker');
         updateModeToggle(savedMode);
 
-        const limitInput = panel.querySelector('#xld-download-limit');
-        if (limitInput) {
-            const savedLimit = GM_getValue('downloadLimit', 200);
-            limitInput.value = Number.isFinite(savedLimit) && savedLimit > 0 ? savedLimit : 200;
-            limitInput.addEventListener('change', () => {
-                const value = parseInt(limitInput.value, 10);
-                const normalized = Number.isFinite(value) && value > 0 ? value : 200;
-                limitInput.value = normalized;
-                GM_setValue('downloadLimit', normalized);
-            });
-        }
+        bindSettings(panel);
 
-        const safeModeCheckbox = panel.querySelector('#xld-safe-mode');
-        if (safeModeCheckbox) {
-            safeModeCheckbox.checked = GM_getValue('safeMode', false);
-            safeModeCheckbox.addEventListener('change', () => {
-                GM_setValue('safeMode', safeModeCheckbox.checked);
-            });
-        }
-
-        const autoPauseCheckbox = panel.querySelector('#xld-auto-pause');
-        if (autoPauseCheckbox) {
-            autoPauseCheckbox.checked = GM_getValue('autoPause', true);
-            autoPauseCheckbox.addEventListener('change', () => {
-                GM_setValue('autoPause', autoPauseCheckbox.checked);
-            });
-        }
-
-        const preloadBufferInput = panel.querySelector('#xld-preload-buffer');
-        if (preloadBufferInput) {
-            const savedBuffer = GM_getValue('preloadBuffer', 50);
-            preloadBufferInput.value = Number.isFinite(savedBuffer) && savedBuffer >= 0 ? savedBuffer : 50;
-            preloadBufferInput.addEventListener('change', () => {
-                const value = parseInt(preloadBufferInput.value, 10);
-                const normalized = Number.isFinite(value) && value >= 0 ? value : 50;
-                preloadBufferInput.value = normalized;
-                GM_setValue('preloadBuffer', normalized);
-            });
-        }
-
-        // 初始化显示
         updateModeDisplay();
 
         return { overlay, panel };
@@ -664,14 +692,7 @@
     function showForegroundWarning(message) {
         ensureForegroundWarning();
         if (!foregroundWarningEl.dataset.ready) {
-            foregroundWarningEl.innerHTML = `
-                <div class="xld-warning-icon"><span>!</span></div>
-                <div class="xld-warning-message"></div>
-                <div class="xld-warning-status"></div>
-                <div class="xld-warning-progress">
-                    <div class="xld-warning-progress-bar"></div>
-                </div>
-            `;
+            foregroundWarningEl.innerHTML = WARNING_HTML;
             foregroundWarningEl.dataset.ready = 'true';
         }
 
@@ -725,37 +746,20 @@
         return GM_getValue('downloadMode', 'marker');
     }
 
-    function getDownloadLimit() {
-        const input = document.getElementById('xld-download-limit');
-        const value = input ? parseInt(input.value, 10) : GM_getValue('downloadLimit', 200);
-        if (Number.isFinite(value) && value > 0) return value;
-        return 200;
-    }
-
-    function getSafeMode() {
-        const input = document.getElementById('xld-safe-mode');
-        if (input) return input.checked;
-        return GM_getValue('safeMode', false);
-    }
-
-    function getAutoPause() {
-        const input = document.getElementById('xld-auto-pause');
-        if (input) return input.checked;
-        return GM_getValue('autoPause', true);
-    }
-
-    function getPreloadWindow() {
-        if (!GM_getValue('preloadWindow', true)) {
-            GM_setValue('preloadWindow', true);
-        }
-        return true;
-    }
-
-    function getPreloadBuffer() {
-        const input = document.getElementById('xld-preload-buffer');
-        const value = input ? parseInt(input.value, 10) : GM_getValue('preloadBuffer', 50);
-        if (Number.isFinite(value) && value >= 0) return value;
-        return 50;
+    function buildMarkerInfoHtml(options) {
+        const displayText = options.displayText || '(无文字内容)';
+        const titleText = options.titleText || '';
+        const shortId = options.id ? `${options.id.substring(0, 8)}...` : '';
+        const thumbHtml = options.thumbnail
+            ? `<img class="xld-marker-thumb" src="${options.thumbnail}" alt="缩略图">`
+            : '';
+        return `
+            ${thumbHtml}
+            <div class="xld-marker-text">
+                <div class="xld-marker-title" title="${titleText}">${displayText}</div>
+                <div class="xld-marker-id">ID: ${shortId}</div>
+            </div>
+        `.trim();
     }
 
     function updateResumeDisplay() {
@@ -771,19 +775,12 @@
         const savedSnapshot = GM_getValue('fullResumeSnapshot', null);
         const savedResume = savedSnapshot?.resumePoint || GM_getValue('fullResumePoint', null);
         if (savedResume && savedResume.id) {
-            const shortId = savedResume.id.substring(0, 8) + '...';
-            const displayText = savedResume.text || '(无文字内容)';
-            let thumbHtml = '';
-            if (savedResume.thumbnail) {
-                thumbHtml = `<img class="xld-marker-thumb" src="${savedResume.thumbnail}" alt="缩略图">`;
-            }
-            resumeInfo.innerHTML = `
-                ${thumbHtml}
-                <div class="xld-marker-text">
-                    <div class="xld-marker-title" title="${savedResume.text || ''}">${displayText}</div>
-                    <div class="xld-marker-id">ID: ${shortId}</div>
-                </div>
-            `;
+            resumeInfo.innerHTML = buildMarkerInfoHtml({
+                id: savedResume.id,
+                displayText: savedResume.text || '(无文字内容)',
+                titleText: savedResume.text || '',
+                thumbnail: savedResume.thumbnail || ''
+            });
             if (clearBtn) clearBtn.disabled = false;
         } else {
             resumeInfo.innerHTML = `<span class="xld-marker-empty">未设置续传点</span>`;
@@ -792,7 +789,6 @@
     }
 
     function clearFallbackAnchorDisplay() {
-        lastFallbackAnchor = null;
         const wrap = document.getElementById('xld-fallback-wrap');
         const info = document.getElementById('xld-fallback-info');
         if (info) info.innerHTML = '';
@@ -809,22 +805,14 @@
             return;
         }
 
-        lastFallbackAnchor = anchorInfo;
-        const shortId = anchorInfo.id.substring(0, 8) + '...';
         const rawText = anchorInfo.text || anchorInfo.fullText || '(无文字内容)';
         const displayText = rawText.length > 50 ? `${rawText.substring(0, 50)}...` : rawText;
-        let thumbHtml = '';
-        if (anchorInfo.thumbnail) {
-            thumbHtml = `<img class="xld-marker-thumb" src="${anchorInfo.thumbnail}" alt="缩略图">`;
-        }
-
-        info.innerHTML = `
-            ${thumbHtml}
-            <div class="xld-marker-text">
-                <div class="xld-marker-title" title="${rawText}">${displayText}</div>
-                <div class="xld-marker-id">ID: ${shortId}</div>
-            </div>
-        `;
+        info.innerHTML = buildMarkerInfoHtml({
+            id: anchorInfo.id,
+            displayText: displayText,
+            titleText: rawText,
+            thumbnail: anchorInfo.thumbnail || ''
+        });
         wrap.style.display = 'block';
     }
 
@@ -868,22 +856,12 @@
         const isMarkerMode = mode === 'marker';
 
         if (savedMarker && savedMarker.id) {
-            // 显示缩略图和标题
-            let thumbHtml = '';
-            if (savedMarker.thumbnail && isMarkerMode) {
-                thumbHtml = `<img class="xld-marker-thumb" src="${savedMarker.thumbnail}" alt="缩略图">`;
-            }
-
-            const displayText = savedMarker.text || '(无文字内容)';
-            const shortId = savedMarker.id.substring(0, 8) + '...';
-
-            markerInfo.innerHTML = `
-                ${thumbHtml}
-                <div class="xld-marker-text">
-                    <div class="xld-marker-title" title="${savedMarker.text || ''}">${displayText}</div>
-                    <div class="xld-marker-id">ID: ${shortId}</div>
-                </div>
-            `;
+            markerInfo.innerHTML = buildMarkerInfoHtml({
+                id: savedMarker.id,
+                displayText: savedMarker.text || '(无文字内容)',
+                titleText: savedMarker.text || '',
+                thumbnail: isMarkerMode && savedMarker.thumbnail ? savedMarker.thumbnail : ''
+            });
 
             if (markerActions) markerActions.style.display = 'flex';
             if (initSection) initSection.style.display = 'none';
@@ -924,74 +902,76 @@
         updateStatus('续传点已清除');
     }
 
-    // ========== 选择模式 ==========
     let isSelectMode = false;
     let selectModeBar = null;
     let selectModeTarget = 'marker';
 
-    function enterSelectMode(target = 'marker') {
-        // 检查是否在likes页面
+    function ensureLikesPage(options) {
         const currentUrl = window.location.href;
-        if (!currentUrl.includes('/likes')) {
-            const username = getCurrentUsername();
-            if (username) {
-                const targetLabel = target === 'resume' ? '续传点' : '标记点';
+        if (currentUrl.includes('/likes')) return true;
+
+        const username = getCurrentUsername();
+        if (username) {
+            if (options?.onNeedLikesPage) {
+                options.onNeedLikesPage(username);
+            } else {
+                window.location.href = `https://x.com/${username}/likes`;
+            }
+        } else if (options?.onLoginRequired) {
+            options.onLoginRequired();
+        }
+        return false;
+    }
+
+    function buildSelectModeBarHtml(targetLabel) {
+        return `
+            <span>点击任意推文将其设为${targetLabel}</span>
+            <button id="xld-cancel-select">取消</button>
+        `.trim();
+    }
+
+    function enterSelectMode(target = 'marker') {
+        const targetLabel = target === 'resume' ? '续传点' : '标记点';
+        if (!ensureLikesPage({
+            onNeedLikesPage: (username) => {
                 alert(`请先打开你的 Likes 页面，然后再选择${targetLabel}`);
                 window.location.href = `https://x.com/${username}/likes`;
-                return;
-            } else {
+            },
+            onLoginRequired: () => {
                 alert('请先登录');
-                return;
             }
+        })) {
+            return;
         }
 
         isSelectMode = true;
         selectModeTarget = target;
         closePanel();
 
-        // 创建顶部提示条
-        const targetLabel = target === 'resume' ? '续传点' : '标记点';
         selectModeBar = document.createElement('div');
         selectModeBar.className = 'xld-select-mode-bar';
-        selectModeBar.innerHTML = `
-            <span>点击任意推文将其设为${targetLabel}</span>
-            <button id="xld-cancel-select">取消</button>
-        `;
+        selectModeBar.innerHTML = buildSelectModeBarHtml(targetLabel);
         document.body.appendChild(selectModeBar);
 
         selectModeBar.querySelector('#xld-cancel-select').addEventListener('click', exitSelectMode);
 
-        // 给所有推文添加可选样式和点击事件
-        const tweets = document.querySelectorAll('[data-testid="tweet"]');
-        tweets.forEach(tweet => {
-            tweet.classList.add('xld-tweet-selectable');
-            tweet.addEventListener('click', handleTweetSelect, true);
-        });
+        toggleSelectableTweets(document, true);
 
-        // 监听新加载的推文
         startTweetObserver();
     }
 
     function exitSelectMode() {
         isSelectMode = false;
 
-        // 移除顶部提示条
         if (selectModeBar) {
             selectModeBar.remove();
             selectModeBar = null;
         }
 
-        // 移除推文的可选样式和事件
-        const tweets = document.querySelectorAll('.xld-tweet-selectable');
-        tweets.forEach(tweet => {
-            tweet.classList.remove('xld-tweet-selectable');
-            tweet.removeEventListener('click', handleTweetSelect, true);
-        });
+        toggleSelectableTweets(document, false);
 
-        // 停止监听
         stopTweetObserver();
 
-        // 重新打开面板
         openPanel();
     }
 
@@ -1026,6 +1006,27 @@
 
     let tweetObserver = null;
 
+    function toggleTweetSelectable(tweet, enabled) {
+        if (!tweet) return;
+        if (enabled) {
+            if (tweet.classList.contains('xld-tweet-selectable')) return;
+            tweet.classList.add('xld-tweet-selectable');
+            tweet.addEventListener('click', handleTweetSelect, true);
+        } else if (tweet.classList.contains('xld-tweet-selectable')) {
+            tweet.classList.remove('xld-tweet-selectable');
+            tweet.removeEventListener('click', handleTweetSelect, true);
+        }
+    }
+
+    function toggleSelectableTweets(root, enabled) {
+        if (!root) return;
+        const tweets = root.querySelectorAll ? root.querySelectorAll('[data-testid="tweet"]') : [];
+        tweets.forEach(tweet => toggleTweetSelectable(tweet, enabled));
+        if (root.matches && root.matches('[data-testid="tweet"]')) {
+            toggleTweetSelectable(root, enabled);
+        }
+    }
+
     function startTweetObserver() {
         tweetObserver = new MutationObserver((mutations) => {
             if (!isSelectMode) return;
@@ -1033,18 +1034,7 @@
             mutations.forEach(mutation => {
                 mutation.addedNodes.forEach(node => {
                     if (node.nodeType === 1) {
-                        const tweets = node.querySelectorAll ? node.querySelectorAll('[data-testid="tweet"]') : [];
-                        tweets.forEach(tweet => {
-                            if (!tweet.classList.contains('xld-tweet-selectable')) {
-                                tweet.classList.add('xld-tweet-selectable');
-                                tweet.addEventListener('click', handleTweetSelect, true);
-                            }
-                        });
-                        // 检查节点本身是否是推文
-                        if (node.matches && node.matches('[data-testid="tweet"]') && !node.classList.contains('xld-tweet-selectable')) {
-                            node.classList.add('xld-tweet-selectable');
-                            node.addEventListener('click', handleTweetSelect, true);
-                        }
+                        toggleSelectableTweets(node, true);
                     }
                 });
             });
@@ -1065,28 +1055,24 @@
         initBtn.disabled = true;
         initBtn.textContent = '正在初始化...';
 
-        // 检查是否在likes页面
-        const currentUrl = window.location.href;
-        if (!currentUrl.includes('/likes')) {
-            const username = getCurrentUsername();
-            if (username) {
+        if (!ensureLikesPage({
+            onNeedLikesPage: (username) => {
                 updateStatus('请先打开你的 Likes 页面');
                 initBtn.disabled = false;
                 initBtn.textContent = '初始化标记点';
                 window.location.href = `https://x.com/${username}/likes`;
-                return;
-            } else {
+            },
+            onLoginRequired: () => {
                 updateStatus('请先登录');
                 initBtn.disabled = false;
                 initBtn.textContent = '初始化标记点';
-                return;
             }
+        })) {
+            return;
         }
 
-        // 等待页面加载
         await sleep(1000);
 
-        // 获取第一条推文
         const tweets = document.querySelectorAll('[data-testid="tweet"]');
         if (tweets.length > 0) {
             const firstTweet = tweets[0];
@@ -1107,57 +1093,69 @@
         initBtn.textContent = '初始化标记点';
     }
 
-    // 提取推文的完整信息（ID、文本、缩略图）- 用于显示和保存
-    function extractTweetInfo(tweet) {
+    function collectTweetMeta(tweet) {
         const id = extractTweetId(tweet);
 
-        // 提取推文作者名
         let authorName = '';
-        // 方法1: 从用户头像旁边的链接获取
         const userNameEl = tweet.querySelector('[data-testid="User-Name"]');
         if (userNameEl) {
-            // 第一个 span 通常是显示名称
             const nameSpan = userNameEl.querySelector('a span');
             if (nameSpan) {
                 authorName = nameSpan.textContent.trim();
             }
         }
 
-        // 提取推文文本（完整版用于匹配）
         let fullText = '';
-        let text = '';
         const tweetTextEl = tweet.querySelector('[data-testid="tweetText"]');
         if (tweetTextEl) {
             fullText = tweetTextEl.textContent.trim();
-            text = fullText;
-            // 显示用的截断版本
-            if (text.length > 50) {
-                text = text.substring(0, 50) + '...';
-            }
         }
 
-        // 如果没有文字内容，用作者名填充
-        if (!text && authorName) {
-            text = `@${authorName} 的推文`;
-            fullText = text;
-        }
-
-        // 提取缩略图URL（用于显示）
         let thumbnail = '';
-        // 提取媒体ID（用于匹配）
         let mediaId = '';
         const img = tweet.querySelector('[data-testid="tweetPhoto"] img');
         if (img && img.src) {
-            // 使用小尺寸缩略图用于显示
             thumbnail = img.src.replace(/&name=\w+/, '&name=small');
-            // 提取媒体ID用于匹配
             const mediaMatch = img.src.match(/\/media\/([A-Za-z0-9_-]+)/);
             if (mediaMatch) {
                 mediaId = mediaMatch[1];
             }
         }
 
-        return { id, text, fullText, thumbnail, mediaId, authorName };
+        let authorUsername = '';
+        const authorLink = tweet.querySelector('a[href^="/"][role="link"]');
+        if (authorLink) {
+            const usernameMatch = authorLink.href.match(/x\.com\/([^\/]+)/);
+            if (usernameMatch) {
+                authorUsername = usernameMatch[1];
+            }
+        }
+
+        return { id, fullText, thumbnail, mediaId, authorName, authorUsername };
+    }
+
+    function extractTweetInfo(tweet) {
+        const meta = collectTweetMeta(tweet);
+        let fullText = meta.fullText || '';
+        let text = fullText;
+
+        if (text.length > 50) {
+            text = text.substring(0, 50) + '...';
+        }
+
+        if (!text && meta.authorName) {
+            text = `@${meta.authorName} 的推文`;
+            fullText = text;
+        }
+
+        return {
+            id: meta.id,
+            text,
+            fullText,
+            thumbnail: meta.thumbnail,
+            mediaId: meta.mediaId,
+            authorName: meta.authorName
+        };
     }
 
     function updateStatus(text, progress = null) {
@@ -1179,7 +1177,6 @@
         }
     }
 
-    // ========== 日期工具 ==========
     function getSelectedTypes() {
         return {
             image: document.getElementById('xld-type-image').checked,
@@ -1188,36 +1185,32 @@
         };
     }
 
-    // ========== 扫描逻辑 ==========
-    let firstTweetInfo = null; // 记录本次扫描的第一条推文信息，用于设置新标记
+    let firstTweetInfo = null;
 
     async function startScan() {
         if (isScanning) return;
 
-        // 检查是否在likes页面
-        const currentUrl = window.location.href;
-        if (!currentUrl.includes('/likes')) {
-            const username = getCurrentUsername();
-            if (username) {
+        if (!ensureLikesPage({
+            onNeedLikesPage: (username) => {
                 updateStatus('正在跳转到 Likes 页面...');
                 window.location.href = `https://x.com/${username}/likes`;
-                return;
-            } else {
+            },
+            onLoginRequired: () => {
                 updateStatus('请先登录或手动打开 Likes 页面');
-                return;
             }
+        })) {
+            return;
         }
 
         const mode = getDownloadMode();
         const types = getSelectedTypes();
-        const limit = mode === 'full' ? getDownloadLimit() : Infinity;
+        const limit = mode === 'full' ? getSetting(SETTING_DEFS.downloadLimit) : Infinity;
         const scanOptions = {
             mode,
             limit,
-            safetyMode: getSafeMode(),
-            autoPause: getAutoPause(),
-            preloadWindow: getPreloadWindow(),
-            preloadBuffer: getPreloadBuffer()
+            safetyMode: getSetting(SETTING_DEFS.safeMode),
+            autoPause: getSetting(SETTING_DEFS.autoPause),
+            preloadBuffer: getSetting(SETTING_DEFS.preloadBuffer)
         };
         let statusText = '开始扫描...';
 
@@ -1303,7 +1296,6 @@
     }
 
     function getCurrentUsername() {
-        // 尝试从页面获取当前登录用户名
         const accountSwitcher = document.querySelector('[data-testid="SideNav_AccountSwitcher_Button"]');
         if (accountSwitcher) {
             const spans = accountSwitcher.querySelectorAll('span');
@@ -1332,7 +1324,6 @@
         const limit = Number.isFinite(options?.limit) && options.limit > 0 ? options.limit : Infinity;
         const safetyMode = !!options?.safetyMode;
         const autoPause = !!options?.autoPause;
-        const preloadWindow = !!options?.preloadWindow;
         const preloadBuffer = Number.isFinite(options?.preloadBuffer) && options.preloadBuffer >= 0 ? options.preloadBuffer : 50;
         const anchorSearchCount = Number.isFinite(options?.anchorSearchCount) && options.anchorSearchCount > 0
             ? options.anchorSearchCount
@@ -1350,29 +1341,55 @@
         let slowSeekNoticeShown = false;
         const anchorMissingMaxAttempts = 2;
 
-        console.log('[XLD] ========== 开始扫描 ==========');
-        if (mode === 'marker') {
-            console.log('[XLD] 标记点信息:', JSON.stringify(savedMarker, null, 2));
-        } else {
-            console.log('[XLD] 全量下载模式，续传点:', JSON.stringify(resumePoint, null, 2));
+        function applyAnchorSearchResult(anchorResult, allowRetryOnNoResult) {
+            if (anchorResult?.anchorMissing) {
+                anchorMissingAttempts++;
+                seekMode = 'lock';
+                if (!slowSeekNoticeShown) {
+                    updateStatus('未找到锚点，改为慢扫定位续传点...', null);
+                    slowSeekNoticeShown = true;
+                }
+                if (anchorMissingAttempts <= anchorMissingMaxAttempts) {
+                    noNewContentCount = 0;
+                    lastSeenCount = seenTweetIds.size;
+                }
+            }
+            if (anchorResult?.found || anchorResult?.fallback) {
+                resumeFound = true;
+                fallbackUsed = fallbackUsed || !!anchorResult.fallback;
+                if (anchorResult.fallback) {
+                    if (anchorResult.anchorInfo) {
+                        updateFallbackAnchorDisplay(anchorResult.anchorInfo);
+                    }
+                    updateStatus('续传点未出现，已自动回退到锚点（见上方缩略图），建议点击“选择”手动指定续传点', null);
+                } else {
+                    updateStatus('已在锚点附近找到续传点，开始下载...', null);
+                }
+                if (anchorResult.found && resumePoint?.id) {
+                    resumeSkipId = resumePoint.id;
+                }
+                noNewContentCount = 0;
+                lastSeenCount = seenTweetIds.size;
+                return true;
+            }
+            if (!anchorResult?.anchorMissing && allowRetryOnNoResult) {
+                anchorSearchAttempted = false;
+            }
+            return false;
         }
 
-        if (preloadWindow) {
-            let preloadTarget = 0;
-            if (mode === 'full' && !resumePoint && Number.isFinite(limit) && limit > 0) {
-                preloadTarget = limit + preloadBuffer;
-            } else if (mode === 'marker') {
-                preloadTarget = preloadBuffer;
-            }
-            if (preloadTarget > 0) {
-                await preloadWindowBeforeScan(preloadTarget, autoPause);
-            }
+        const preloadTarget = mode === 'full' && !resumePoint && Number.isFinite(limit) && limit > 0
+            ? limit + preloadBuffer
+            : mode === 'marker'
+                ? preloadBuffer
+                : 0;
+        if (preloadTarget > 0) {
+            await preloadWindowBeforeScan(preloadTarget, autoPause);
         }
 
         while (noNewContentCount < 8 && !reachedMarker && !reachedLimit) {
             await waitForForegroundIfNeeded(autoPause);
 
-            // 获取当前可见的推文
             const tweets = document.querySelectorAll('[data-testid="tweet"]');
 
             for (const tweet of tweets) {
@@ -1380,7 +1397,6 @@
                 const tweetId = extractTweetId(tweet);
                 const anchorMatch = anchors ? matchAnchorTweet(tweet, anchors) : null;
 
-                // 【关键】无论是否处理过，都要检查是否是标记点
                 if (mode === 'marker' && savedMarker) {
                     const isMarker = isMarkerTweet(tweet, savedMarker);
                     if (isMarker) {
@@ -1393,7 +1409,6 @@
                 const seekingNow = mode === 'full' && resumePoint && !resumeFound;
                 const seenSet = seekingNow ? seekSeenTweetIds : seenTweetIds;
 
-                // 跳过已处理的推文
                 if (tweetId) {
                     if (seenSet.has(tweetId)) continue;
                     seenSet.add(tweetId);
@@ -1432,15 +1447,8 @@
                     continue;
                 }
 
-                // 每处理10条推文输出一次日志
-                if (totalScanned % 10 === 0) {
-                    console.log(`[XLD] 已扫描 ${totalScanned} 条推文，找到 ${collectedMedia.length} 个媒体`);
-                }
-
-                // 记录第一条推文信息（最新的点赞）
                 if (!firstTweetInfo) {
                     firstTweetInfo = extractTweetInfo(tweet);
-                    console.log('[XLD] 第一条推文:', firstTweetInfo.id, firstTweetInfo.text);
                 }
 
                 if (resumeSkipId && resumePoint) {
@@ -1450,7 +1458,6 @@
                     continue;
                 }
 
-                // 提取媒体（DOM优先，API兜底）
                 const mediaItems = await extractMediaWithApiFallback(tweet, types);
                 for (const item of mediaItems) {
                     if (!seenUrls.has(item.url)) {
@@ -1479,43 +1486,13 @@
                     anchorSearchQueued.side
                 );
                 anchorSearchQueued = null;
-                if (anchorResult?.anchorMissing) {
-                    anchorMissingAttempts++;
-                    seekMode = 'lock';
-                    if (!slowSeekNoticeShown) {
-                        updateStatus('未找到锚点，改为慢扫定位续传点...', null);
-                        slowSeekNoticeShown = true;
-                    }
-                    if (anchorMissingAttempts <= anchorMissingMaxAttempts) {
-                        noNewContentCount = 0;
-                        lastSeenCount = seenTweetIds.size;
-                    }
-                }
-                if (anchorResult?.found || anchorResult?.fallback) {
-                    resumeFound = true;
-                    fallbackUsed = fallbackUsed || !!anchorResult.fallback;
-                    if (anchorResult.fallback) {
-                        if (anchorResult.anchorInfo) {
-                            updateFallbackAnchorDisplay(anchorResult.anchorInfo);
-                        }
-                        updateStatus('续传点未出现，已自动回退到锚点（见上方缩略图），建议点击“选择”手动指定续传点', null);
-                    } else {
-                        updateStatus('已在锚点附近找到续传点，开始下载...', null);
-                    }
-                    if (anchorResult.found && resumePoint?.id) {
-                        resumeSkipId = resumePoint.id;
-                    }
-                    noNewContentCount = 0;
-                    lastSeenCount = seenTweetIds.size;
+                if (applyAnchorSearchResult(anchorResult, true)) {
                     continue;
-                } else if (!anchorResult?.anchorMissing) {
-                    anchorSearchAttempted = false;
                 }
             }
 
             if (reachedMarker || reachedLimit) break;
 
-            // 根据是否在定位续传点调整滚动速度
             const seeking = mode === 'full' && resumePoint && !resumeFound;
             const fastSeeking = seeking && seekMode === 'fast' && !safetyMode;
             const slowSeeking = seeking && !fastSeeking;
@@ -1527,15 +1504,13 @@
             const delayMs = fastSeeking ? 200 : slowSeeking ? 900 : 800;
             await waitForForegroundIfNeeded(autoPause);
             window.scrollBy(0, scrollStep);
-            await sleep(delayMs); // 等待推文加载
+            await sleep(delayMs);
 
-            // 检查是否有新推文加载
             const currentSeenCount = (mode === 'full' && resumePoint && !resumeFound)
                 ? seekSeenTweetIds.size
                 : seenTweetIds.size;
             if (currentSeenCount === lastSeenCount) {
                 noNewContentCount++;
-                console.log(`[XLD] 没有新推文 (${noNewContentCount}/8)`);
             } else {
                 noNewContentCount = 0;
             }
@@ -1544,40 +1519,9 @@
             if (mode === 'full' && resumePoint && !resumeFound && anchors && !anchorSearchAttempted && noNewContentCount >= 8) {
                 anchorSearchAttempted = true;
                 const anchorResult = await searchResumeAroundAnchors(resumePoint, anchors, autoPause, anchorSearchCount, null);
-                if (anchorResult?.anchorMissing) {
-                    anchorMissingAttempts++;
-                    seekMode = 'lock';
-                    if (!slowSeekNoticeShown) {
-                        updateStatus('未找到锚点，改为慢扫定位续传点...', null);
-                        slowSeekNoticeShown = true;
-                    }
-                    if (anchorMissingAttempts <= anchorMissingMaxAttempts) {
-                        noNewContentCount = 0;
-                        lastSeenCount = seenTweetIds.size;
-                    }
-                }
-                if (anchorResult?.found || anchorResult?.fallback) {
-                    resumeFound = true;
-                    fallbackUsed = fallbackUsed || !!anchorResult.fallback;
-                    if (anchorResult.fallback) {
-                        if (anchorResult.anchorInfo) {
-                            updateFallbackAnchorDisplay(anchorResult.anchorInfo);
-                        }
-                        updateStatus('续传点未出现，已自动回退到锚点（见上方缩略图），建议点击“选择”手动指定续传点', null);
-                    } else {
-                        updateStatus('已在锚点附近找到续传点，开始下载...', null);
-                    }
-                    if (anchorResult.found && resumePoint?.id) {
-                        resumeSkipId = resumePoint.id;
-                    }
-                    noNewContentCount = 0;
-                    lastSeenCount = seenTweetIds.size;
-                }
+                applyAnchorSearchResult(anchorResult, false);
             }
         }
-
-        console.log('[XLD] ========== 扫描结束 ==========');
-        console.log(`[XLD] 共扫描 ${totalScanned} 条，找到 ${collectedMedia.length} 个媒体，到达标记点: ${reachedMarker}, 达到上限: ${reachedLimit}`);
 
         if (mode === 'full' && resumePoint && !resumeFound) {
             return { stopReason: 'resume-missing', resumePoint: null, resumeSnapshot: null, fallbackUsed };
@@ -1623,7 +1567,7 @@
         updateStatus('预加载完成，正在回到起始位置...', null);
         let returned = false;
         if (startPoint && startPoint.id) {
-            returned = await scrollToSavedPoint(startPoint, autoPause, '起始点');
+            returned = await scrollToSavedPoint(startPoint, autoPause);
         }
         if (!returned) {
             window.scrollTo(0, 0);
@@ -1631,14 +1575,14 @@
         }
     }
 
-    async function scrollToSavedPoint(savedPoint, autoPause, label) {
+    async function scrollToSavedPoint(savedPoint, autoPause) {
         if (!savedPoint || !savedPoint.id) return false;
         const maxAttempts = 24;
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
             await waitForForegroundIfNeeded(autoPause);
             const tweets = document.querySelectorAll('[data-testid="tweet"]');
             for (const tweet of tweets) {
-                if (isMatchTweet(tweet, savedPoint, label)) {
+                if (isMatchTweet(tweet, savedPoint)) {
                     tweet.scrollIntoView({ block: 'center' });
                     await sleep(400);
                     return true;
@@ -1737,23 +1681,14 @@
             return null;
         };
 
-        const directionOrder = anchorSide === 'before'
-            ? [1, -1]
-            : anchorSide === 'after'
-                ? [-1, 1]
-                : [-1, 1];
-
-        foundTweet = await scanDirection(directionOrder[0]);
-        if (foundTweet) {
-            foundTweet.scrollIntoView({ block: 'center' });
-            await sleep(400);
-            return true;
-        }
-        foundTweet = await scanDirection(directionOrder[1]);
-        if (foundTweet) {
-            foundTweet.scrollIntoView({ block: 'center' });
-            await sleep(400);
-            return true;
+        const directionOrder = anchorSide === 'before' ? [1, -1] : [-1, 1];
+        for (const direction of directionOrder) {
+            foundTweet = await scanDirection(direction);
+            if (foundTweet) {
+                foundTweet.scrollIntoView({ block: 'center' });
+                await sleep(400);
+                return true;
+            }
         }
         return false;
     }
@@ -1762,13 +1697,11 @@
         const media = [];
         const tweetId = extractTweetId(tweet);
 
-        // 图片
         if (types.image || types.gif) {
             const images = tweet.querySelectorAll('[data-testid="tweetPhoto"] img');
             images.forEach((img, index) => {
                 let url = img.src;
 
-                // 获取原图质量
                 if (url.includes('pbs.twimg.com/media/')) {
                     url = url.replace(/\?format=\w+/, '?format=jpg')
                              .replace(/&name=\w+/, '&name=orig');
@@ -1777,7 +1710,6 @@
                     }
                 }
 
-                // 判断是否为GIF
                 const isGif = img.closest('[data-testid="tweetPhoto"]')?.querySelector('video') != null ||
                               url.includes('tweet_video_thumb');
 
@@ -1799,7 +1731,6 @@
             });
         }
 
-        // 视频
         if (types.video) {
             const videos = tweet.querySelectorAll('video');
             videos.forEach((video, index) => {
@@ -1863,18 +1794,14 @@
     }
 
     function extractTweetId(tweet) {
-        // 方法1：从推文时间戳链接提取（最可靠）
-        // 时间戳链接通常是 /username/status/123456 格式，且在推文主体内
         const timeLink = tweet.querySelector('time')?.closest('a[href*="/status/"]');
         if (timeLink) {
             const match = timeLink.href.match(/\/status\/(\d+)/);
             if (match) return match[1];
         }
 
-        // 方法2：从推文内的所有status链接中找到属于推文作者的
         const links = tweet.querySelectorAll('a[href*="/status/"]');
         for (const link of links) {
-            // 排除引用推文（通常在一个嵌套的article或特定容器内）
             const isQuoteTweet = link.closest('[data-testid="tweet"]') !== tweet;
             if (!isQuoteTweet) {
                 const match = link.href.match(/\/status\/(\d+)/);
@@ -1882,49 +1809,23 @@
             }
         }
 
-        // 方法3：兜底，使用第一个找到的
         const anyLink = tweet.querySelector('a[href*="/status/"]');
         if (anyLink) {
             const match = anyLink.href.match(/\/status\/(\d+)/);
             if (match) return match[1];
         }
 
-        return null; // 不再返回时间戳，返回null表示提取失败
+        return null;
     }
 
-    // 提取推文的完整信息用于标记点匹配
     function extractFullTweetInfo(tweet) {
-        const id = extractTweetId(tweet);
-
-        // 提取完整推文文本（不截断，用于匹配）
-        let fullText = '';
-        const tweetTextEl = tweet.querySelector('[data-testid="tweetText"]');
-        if (tweetTextEl) {
-            fullText = tweetTextEl.textContent.trim();
-        }
-
-        // 提取缩略图的媒体ID（从URL中提取，更稳定）
-        let mediaId = '';
-        const img = tweet.querySelector('[data-testid="tweetPhoto"] img');
-        if (img && img.src) {
-            // 从 pbs.twimg.com/media/xxxxx 提取媒体ID
-            const mediaMatch = img.src.match(/\/media\/([A-Za-z0-9_-]+)/);
-            if (mediaMatch) {
-                mediaId = mediaMatch[1];
-            }
-        }
-
-        // 提取推文作者用户名
-        let authorUsername = '';
-        const authorLink = tweet.querySelector('a[href^="/"][role="link"]');
-        if (authorLink) {
-            const usernameMatch = authorLink.href.match(/x\.com\/([^\/]+)/);
-            if (usernameMatch) {
-                authorUsername = usernameMatch[1];
-            }
-        }
-
-        return { id, fullText, mediaId, authorUsername };
+        const meta = collectTweetMeta(tweet);
+        return {
+            id: meta.id,
+            fullText: meta.fullText,
+            mediaId: meta.mediaId,
+            authorUsername: meta.authorUsername
+        };
     }
 
     function buildResumeSnapshot(targetTweet) {
@@ -1962,71 +1863,49 @@
         const after = Array.isArray(anchors.after) ? anchors.after : [];
 
         for (const anchor of before) {
-            if (isMatchTweet(tweet, anchor, '快照(前)')) return { side: 'before', anchor };
+            if (isMatchTweet(tweet, anchor)) return { side: 'before', anchor };
         }
         for (const anchor of after) {
-            if (isMatchTweet(tweet, anchor, '快照(后)')) return { side: 'after', anchor };
+            if (isMatchTweet(tweet, anchor)) return { side: 'after', anchor };
         }
         return null;
     }
 
-    function isMatchTweet(tweet, savedPoint, label) {
+    function isMatchTweet(tweet, savedPoint) {
         if (!savedPoint) return false;
 
         const currentInfo = extractFullTweetInfo(tweet);
         let matchScore = 0;
-        let matchReasons = [];
 
-        // 1. ID精确匹配（权重最高）
         if (currentInfo.id && savedPoint.id && currentInfo.id === savedPoint.id) {
             matchScore += 3;
-            matchReasons.push('ID匹配');
         }
 
-        // 2. 媒体ID匹配（非常可靠，媒体ID是唯一的）
         if (currentInfo.mediaId && savedPoint.mediaId && currentInfo.mediaId === savedPoint.mediaId) {
             matchScore += 2;
-            matchReasons.push('媒体ID匹配');
         }
 
-        // 3. 文本匹配（检查是否包含，因为保存时可能被截断）
         if (currentInfo.fullText && savedPoint.fullText) {
-            // 如果保存的文本是完整文本的前缀，或者完全相同
             if (currentInfo.fullText === savedPoint.fullText ||
                 currentInfo.fullText.startsWith(savedPoint.fullText) ||
                 savedPoint.fullText.startsWith(currentInfo.fullText)) {
                 matchScore += 1;
-                matchReasons.push('文本匹配');
             }
         }
 
-        // 判断逻辑：
-        // - ID匹配 → 直接认定（分数>=3）
-        // - 媒体ID + 文本匹配 → 认定（分数>=3）
-        // - 仅媒体ID匹配 → 认定（分数>=2，媒体ID本身就很可靠）
         const isMatch = matchScore >= 2;
-
-        // 调试：显示每个推文的匹配情况（只显示有部分匹配的）
-        if (matchScore > 0 || currentInfo.id === savedPoint.id) {
-            console.log(`[XLD] ${label}匹配检查: ID=${currentInfo.id}, 分数=${matchScore}, 原因=[${matchReasons.join(',')}]`);
-            console.log(`[XLD]   当前: mediaId=${currentInfo.mediaId}, text=${currentInfo.fullText?.substring(0,30)}`);
-            console.log(`[XLD]   ${label}: mediaId=${savedPoint.mediaId}, text=${savedPoint.fullText?.substring(0,30)}`);
-        }
 
         return isMatch;
     }
 
-    // 检查是否是标记点推文（多重验证）
     function isMarkerTweet(tweet, savedMarker) {
-        return isMatchTweet(tweet, savedMarker, '标记点');
+        return isMatchTweet(tweet, savedMarker);
     }
 
-    // 检查是否是续传点推文（多重验证）
     function isResumeTweet(tweet, resumePoint) {
-        return isMatchTweet(tweet, resumePoint, '续传点');
+        return isMatchTweet(tweet, resumePoint);
     }
 
-    // ========== 下载逻辑 ==========
     async function downloadAll() {
         if (collectedMedia.length === 0) {
             updateStatus('没有可下载的文件');
@@ -2039,14 +1918,12 @@
         isDownloading = true;
         updateForegroundWarning();
 
-        // 生成文件名：[Xlike]2024-01-08.zip
         const dateStr = new Date().toISOString().split('T')[0];
         const zipFileName = `[Xlike]${dateStr}.zip`;
 
         let completed = 0;
         let failed = 0;
 
-        // 检查 fflate 是否可用
         if (typeof fflate === 'undefined') {
             updateStatus('fflate 未加载，请刷新页面重试');
             downloadBtn.disabled = false;
@@ -2059,7 +1936,6 @@
 
         updateStatus(`正在下载文件...`, 0);
 
-        // 第一步：下载所有文件到内存
         for (const item of collectedMedia) {
             await waitForForegroundIfNeeded(autoPause);
             try {
@@ -2067,7 +1943,6 @@
 
                 const blob = await fetchMedia(item.url);
                 if (blob && blob.size > 0) {
-                    // 转换 Blob 为 Uint8Array
                     const arrayBuffer = await blob.arrayBuffer();
                     files[item.filename] = new Uint8Array(arrayBuffer);
                 } else {
@@ -2089,22 +1964,17 @@
             return;
         }
 
-        // 第二步：使用 fflate 生成 ZIP
         updateStatus(`正在打包 ${Object.keys(files).length} 个文件...`, 75);
 
         try {
-            // fflate.zipSync 同步打包（不压缩，速度快）
             const zipped = fflate.zipSync(files, { level: 0 });
 
-            // 转换为 Blob
             const blob = new Blob([zipped], { type: 'application/zip' });
 
             updateStatus('正在保存 ZIP 文件...', 90);
 
-            // 第三步：下载 ZIP
             const blobUrl = URL.createObjectURL(blob);
 
-            // 使用 a 标签下载（更可靠）
             const a = document.createElement('a');
             a.href = blobUrl;
             a.download = zipFileName;
@@ -2112,16 +1982,13 @@
             a.click();
             document.body.removeChild(a);
 
-            // 延迟释放 URL
             setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
 
-            // 更新标记点（仅标记点模式且确实到达标记点）
             if (lastScanMode === 'marker' && lastScanStopReason === 'marker' && firstTweetInfo && firstTweetInfo.id) {
                 GM_setValue('markerTweetId', firstTweetInfo);
                 updateMarkerDisplay();
             }
 
-            // 更新续传点（全量下载模式）
             if (lastScanMode === 'full') {
                 if (lastScanStopReason === 'limit' && pendingResumeSnapshot && pendingResumeSnapshot.resumePoint?.id) {
                     GM_setValue('fullResumeSnapshot', pendingResumeSnapshot);
@@ -2150,7 +2017,7 @@
         return new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
                 reject(new Error('下载超时'));
-            }, 30000); // 30秒超时
+            }, 30000);
 
             GM_xmlhttpRequest({
                 method: 'GET',
@@ -2177,7 +2044,6 @@
         });
     }
 
-    // ========== 工具函数 ==========
     function sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
@@ -2190,7 +2056,6 @@
         }
     }
 
-    // ========== API 相关 ==========
     function getCookies() {
         const cookies = {};
         document.cookie.split(';').filter(n => n.indexOf('=') > 0).forEach(n => {
@@ -2281,7 +2146,6 @@
                     filename: `${tweet.id_str}_img_${index}.jpg`
                 });
             } else if (item.type === 'video' || item.type === 'animated_gif') {
-                // 获取最高码率的视频
                 const variants = item.video_info?.variants || [];
                 const mp4Variants = variants.filter(v => v.content_type === 'video/mp4');
                 const bestVariant = mp4Variants.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
@@ -2290,7 +2154,7 @@
                     const ext = item.type === 'animated_gif' ? 'gif.mp4' : 'mp4';
                     media.push({
                         type: item.type === 'animated_gif' ? 'gif' : 'video',
-                        url: bestVariant.url.split('?')[0], // 移除查询参数
+                        url: bestVariant.url.split('?')[0],
                         bitrate: bestVariant.bitrate,
                         filename: `${tweet.id_str}_${item.type === 'animated_gif' ? 'gif' : 'video'}_${index}.${ext}`
                     });
@@ -2305,7 +2169,6 @@
         };
     }
 
-    // ========== 初始化 ==========
     GM_registerMenuCommand('打开 X Likes 下载器', openPanel);
 
 })();
