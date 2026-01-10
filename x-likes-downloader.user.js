@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Likes 下载器
 // @namespace    https://github.com/K4F7/x-like-downloader
-// @version      2.1.21
+// @version      2.1.22
 // @description  下载 X (Twitter) 点赞列表中的图片、GIF和视频
 // @author       You
 // @icon         https://abs.twimg.com/favicons/twitter.3.ico
@@ -1380,9 +1380,7 @@
 
         const preloadTarget = mode === 'full' && !resumePoint && Number.isFinite(limit) && limit > 0
             ? limit + preloadBuffer
-            : mode === 'marker'
-                ? preloadBuffer
-                : 0;
+            : 0;
         if (preloadTarget > 0) {
             await preloadWindowBeforeScan(preloadTarget, autoPause);
         }
