@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Likes 下载器
 // @namespace    https://github.com/K4F7/x-like-downloader
-// @version      2.1.25
+// @version      2.1.26
 // @description  下载 X (Twitter) 点赞列表中的图片、GIF和视频
 // @author       You
 // @icon         https://abs.twimg.com/favicons/twitter.3.ico
@@ -1406,9 +1406,11 @@
 
                 if (mode === 'marker' && savedMarker) {
                     const isMarker = isMarkerTweet(tweet, savedMarker);
-                    if (isMarker && isTweetInViewport(tweet)) {
-                        console.log('[XLD] ✓✓✓ 找到标记点！停止扫描 ✓✓✓');
-                        reachedMarker = true;
+                    if (isMarker) {
+                        if (isMarkerReached(tweet)) {
+                            console.log('[XLD] ✓✓✓ 找到标记点！停止扫描 ✓✓✓');
+                            reachedMarker = true;
+                        }
                         break;
                     }
                 }
@@ -1913,11 +1915,11 @@
         return isMatchTweet(tweet, resumePoint);
     }
 
-    function isTweetInViewport(tweet) {
+    function isMarkerReached(tweet) {
         if (!tweet) return false;
         const rect = tweet.getBoundingClientRect();
         const viewHeight = window.innerHeight || document.documentElement.clientHeight;
-        return rect.bottom >= 0 && rect.top <= viewHeight * 0.9;
+        return rect.top <= viewHeight * 0.9;
     }
 
     function getFirstVisibleTweetId() {
