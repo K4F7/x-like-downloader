@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Likes 下载器
 // @namespace    https://github.com/K4F7/x-like-downloader
-// @version      2.1.24
+// @version      2.1.25
 // @description  下载 X (Twitter) 点赞列表中的图片、GIF和视频
 // @author       You
 // @icon         https://abs.twimg.com/favicons/twitter.3.ico
@@ -587,6 +587,10 @@
         }
         if (input) return !!input.checked;
         return GM_getValue(def.key, def.defaultValue);
+    }
+
+    function getAutoPause() {
+        return getSetting(SETTING_DEFS.autoPause);
     }
 
     function bindSetting(panel, def) {
@@ -1247,7 +1251,7 @@
 
         if (mode === 'marker') {
             updateStatus('正在回到页面顶部...', 0);
-            await scrollToTopIfNeeded(scanOptions.autoPause);
+            await ensureTopBeforeTask(scanOptions.autoPause);
         }
 
         updateStatus(statusText, 0);
@@ -1916,6 +1920,23 @@
         return rect.bottom >= 0 && rect.top <= viewHeight * 0.9;
     }
 
+    function getFirstVisibleTweetId() {
+        const tweets = document.querySelectorAll('[data-testid="tweet"]');
+        let bestTweet = null;
+        let bestTop = Infinity;
+
+        for (const tweet of tweets) {
+            const rect = tweet.getBoundingClientRect();
+            if (rect.bottom <= 0) continue;
+            if (rect.top < bestTop) {
+                bestTop = rect.top;
+                bestTweet = tweet;
+            }
+        }
+
+        return bestTweet ? extractTweetId(bestTweet) : null;
+    }
+
     async function scrollToTopIfNeeded(autoPause) {
         await waitForForegroundIfNeeded(autoPause);
 
@@ -1932,9 +1953,39 @@
         }
     }
 
+    async function ensureTopBeforeTask(autoPause) {
+        const beforeScroll = window.scrollY;
+        const beforeId = getFirstVisibleTweetId();
+
+        await scrollToTopIfNeeded(autoPause);
+
+        if (beforeScroll <= 0 && window.scrollY <= 0) return;
+
+        let stableCount = 0;
+        let lastId = null;
+
+        for (let attempt = 0; attempt < 12; attempt++) {
+            await waitForForegroundIfNeeded(autoPause);
+            await sleep(140);
+            const currentId = getFirstVisibleTweetId();
+
+            if (currentId && currentId === lastId) {
+                stableCount++;
+            } else {
+                stableCount = 0;
+            }
+
+            lastId = currentId;
+
+            if (window.scrollY <= 0 && currentId && currentId !== beforeId && stableCount >= 1) {
+                break;
+            }
+        }
+    }
+
     async function ensureMarkerDownloadStartsAtTop(autoPause) {
         if (lastScanMode !== 'marker') return;
-        await scrollToTopIfNeeded(autoPause);
+        await ensureTopBeforeTask(autoPause);
     }
 
     async function downloadAll() {
