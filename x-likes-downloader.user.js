@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Likes 下载器
 // @namespace    https://github.com/K4F7/x-like-downloader
-// @version      2.1.22
+// @version      2.1.23
 // @description  下载 X (Twitter) 点赞列表中的图片、GIF和视频
 // @author       You
 // @icon         https://abs.twimg.com/favicons/twitter.3.ico
@@ -1245,6 +1245,11 @@
         scanBtn.textContent = '扫描中...';
         downloadBtn.style.display = 'none';
 
+        if (mode === 'marker') {
+            updateStatus('正在回到页面顶部...', 0);
+            await scrollToTopIfNeeded(scanOptions.autoPause);
+        }
+
         updateStatus(statusText, 0);
         updateForegroundWarning();
 
@@ -1904,9 +1909,7 @@
         return isMatchTweet(tweet, resumePoint);
     }
 
-    async function ensureMarkerDownloadStartsAtTop(autoPause) {
-        if (lastScanMode !== 'marker') return;
-
+    async function scrollToTopIfNeeded(autoPause) {
         await waitForForegroundIfNeeded(autoPause);
 
         if (window.scrollY <= 0) return;
@@ -1920,6 +1923,11 @@
             window.scrollTo(0, 0);
             attempts++;
         }
+    }
+
+    async function ensureMarkerDownloadStartsAtTop(autoPause) {
+        if (lastScanMode !== 'marker') return;
+        await scrollToTopIfNeeded(autoPause);
     }
 
     async function downloadAll() {
